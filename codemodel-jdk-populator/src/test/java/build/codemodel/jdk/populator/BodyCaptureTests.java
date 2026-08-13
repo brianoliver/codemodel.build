@@ -5,9 +5,11 @@ import build.codemodel.expression.NumericLiteral;
 import build.codemodel.expression.StringLiteral;
 import build.codemodel.foundation.usage.NamedTypeUsage;
 import build.codemodel.imperative.Return;
+import build.codemodel.jdk.descriptor.EnumConstantDescriptor;
 import build.codemodel.jdk.descriptor.FieldInitializerDescriptor;
 import build.codemodel.jdk.descriptor.MethodBodyDescriptor;
 import build.codemodel.jdk.expression.Lambda;
+import build.codemodel.jdk.expression.NewObject;
 import build.codemodel.jdk.statement.ExpressionStatement;
 import build.codemodel.jdk.statement.LocalVariableDeclaration;
 import build.codemodel.jdk.statement.Try;
@@ -95,6 +97,123 @@ class BodyCaptureTests {
         assertThat(label.getTrait(FieldInitializerDescriptor.class)).isPresent();
         assertThat(label.getTrait(FieldInitializerDescriptor.class).get().initializer())
             .isInstanceOf(StringLiteral.class);
+    }
+
+    @Test
+    void shouldCaptureEnumConstantInitializer() {
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.Suit", """
+                package build.codemodel.jdk.example;
+                public enum Suit {
+                    HEARTS("red"),
+                    SPADES("black");
+
+                    private final String color;
+
+                    Suit(String color) { this.color = color; }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.Suit");
+        final var descriptor = codeModel.getTypeDescriptor(typeName).orElseThrow();
+
+        final var hearts = descriptor.traits(EnumConstantDescriptor.class)
+            .filter(c -> c.name().toString().equals("HEARTS"))
+            .findFirst().orElseThrow();
+        assertThat(hearts.getTrait(FieldInitializerDescriptor.class)).isPresent();
+        final var heartsInitializer = hearts.getTrait(FieldInitializerDescriptor.class).get().initializer();
+        assertThat(heartsInitializer).isInstanceOf(NewObject.class);
+        assertThat(((NewObject) heartsInitializer).args()
+            .filter(StringLiteral.class::isInstance)
+            .map(StringLiteral.class::cast)
+            .map(StringLiteral::value))
+            .containsExactly("red");
+        assertThat(((NewObject) heartsInitializer).anonymousBodyType()).isEmpty();
+
+        final var spades = descriptor.traits(EnumConstantDescriptor.class)
+            .filter(c -> c.name().toString().equals("SPADES"))
+            .findFirst().orElseThrow();
+        assertThat(spades.getTrait(FieldInitializerDescriptor.class)).isPresent();
+        final var spadesInitializer = spades.getTrait(FieldInitializerDescriptor.class).get().initializer();
+        assertThat(((NewObject) spadesInitializer).args()
+            .filter(StringLiteral.class::isInstance)
+            .map(StringLiteral.class::cast)
+            .map(StringLiteral::value))
+            .containsExactly("black");
+    }
+
+    @Test
+    void shouldCaptureEnumConstantInitializerWithNoArgsAsEmptyNewObject() {
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.Direction", """
+                package build.codemodel.jdk.example;
+                public enum Direction {
+                    NORTH, SOUTH, EAST, WEST
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.Direction");
+        final var descriptor = codeModel.getTypeDescriptor(typeName).orElseThrow();
+
+        final var north = descriptor.traits(EnumConstantDescriptor.class)
+            .filter(c -> c.name().toString().equals("NORTH"))
+            .findFirst().orElseThrow();
+        assertThat(north.getTrait(FieldInitializerDescriptor.class)).isPresent();
+        final var initializer = north.trait(FieldInitializerDescriptor.class).initializer();
+        assertThat(initializer).isInstanceOf(NewObject.class);
+        assertThat(((NewObject) initializer).args()).isEmpty();
+    }
+
+    @Test
+    void shouldCaptureEnumConstantInitializerArgsWithClassBody() {
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.Weekday", """
+                package build.codemodel.jdk.example;
+                public enum Weekday {
+                    MONDAY("Mon") {
+                        @Override
+                        public String describe() { return "start of the week"; }
+                    };
+
+                    private final String abbreviation;
+
+                    Weekday(String abbreviation) { this.abbreviation = abbreviation; }
+
+                    public String describe() { return "just another day"; }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.Weekday");
+        final var descriptor = codeModel.getTypeDescriptor(typeName).orElseThrow();
+
+        final var monday = descriptor.traits(EnumConstantDescriptor.class)
+            .filter(c -> c.name().toString().equals("MONDAY"))
+            .findFirst().orElseThrow();
+        assertThat(monday.getTrait(FieldInitializerDescriptor.class)).isPresent();
+        final var mondayInitializer = monday.getTrait(FieldInitializerDescriptor.class).get().initializer();
+        assertThat(mondayInitializer).isInstanceOf(NewObject.class);
+        final var mondayNewObject = (NewObject) mondayInitializer;
+        assertThat(mondayNewObject.args()
+            .filter(StringLiteral.class::isInstance)
+            .map(StringLiteral.class::cast)
+            .map(StringLiteral::value))
+            .containsExactly("Mon");
+
+        assertThat(mondayNewObject.anonymousBodyType()).isPresent();
+        final var bodyTypeDescriptor = codeModel.getTypeDescriptor(mondayNewObject.anonymousBodyType().get()).orElseThrow();
+        final var describeOverride = bodyTypeDescriptor.traits(MethodDescriptor.class)
+            .filter(m -> m.methodName().name().toString().equals("describe"))
+            .findFirst().orElseThrow();
+        assertThat(describeOverride.getTrait(MethodBodyDescriptor.class)).isPresent();
     }
 
     @Test

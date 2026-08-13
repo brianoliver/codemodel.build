@@ -453,9 +453,11 @@ public class JdkExpressionConverter
     }
 
     /**
-     * Resolves the {@link TypeName} a local class/interface/enum/record declaration statement was
-     * registered under (see {@link JdkInitializer}'s {@code visitClass}), matching how
-     * {@link build.codemodel.jdk.statement.LocalTypeDeclaration} needs to reference it.
+     * Resolves the {@link TypeName} a {@link ClassTree} was registered under, whether it's a local
+     * class/interface/enum/record declaration statement (see {@link JdkInitializer}'s
+     * {@code visitClass}, matching how {@link build.codemodel.jdk.statement.LocalTypeDeclaration}
+     * needs to reference it) or an anonymous class body (e.g. {@code new Runnable() { ... }}).
+     * Returns {@link Optional#empty()} for a {@code null} tree.
      */
     Optional<TypeName> resolveLocalTypeName(final ClassTree tree) {
         if (typeNameResolver == null) {
@@ -734,7 +736,8 @@ public class JdkExpressionConverter
         final var outerInstance = t.getEnclosingExpression() == null
             ? Optional.<Expression>empty()
             : Optional.of(convert(t.getEnclosingExpression()));
-        final var newObject = NewObject.of(codeModel, type, args.stream(), typeArgs.stream(), outerInstance);
+        final var anonymousBodyType = resolveLocalTypeName(t.getClassBody());
+        final var newObject = NewObject.of(codeModel, type, args.stream(), typeArgs.stream(), outerInstance, anonymousBodyType);
         addSourceLocation(t).ifPresent(newObject::addTrait);
         return newObject;
     }

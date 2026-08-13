@@ -33,6 +33,7 @@ import build.codemodel.expression.AbstractExpression;
 import build.codemodel.expression.Expression;
 import build.codemodel.foundation.CodeModel;
 import build.codemodel.foundation.descriptor.Trait;
+import build.codemodel.foundation.naming.TypeName;
 import build.codemodel.foundation.usage.TypeUsage;
 
 import java.lang.invoke.MethodHandles;
@@ -71,11 +72,18 @@ public final class NewObject
      */
     private final Optional<Expression> outerInstance;
 
+    /**
+     * The {@link TypeName} of the anonymous type compiled from this expression's class body (e.g.
+     * {@code new Runnable() { ... }}), when it has one.
+     */
+    private final Optional<TypeName> anonymousBodyType;
+
     private NewObject(final CodeModel codeModel,
                       final TypeUsage type,
                       final Stream<Expression> args,
                       final Stream<TypeUsage> typeArguments,
-                      final Optional<Expression> outerInstance) {
+                      final Optional<Expression> outerInstance,
+                      final Optional<TypeName> anonymousBodyType) {
         super(codeModel);
         this.type = Objects.requireNonNull(type, "type must not be null");
         this.args = args == null
@@ -85,6 +93,7 @@ public final class NewObject
             ? new ArrayList<>()
             : typeArguments.collect(Collectors.toCollection(ArrayList::new));
         this.outerInstance = outerInstance == null ? Optional.empty() : outerInstance;
+        this.anonymousBodyType = anonymousBodyType == null ? Optional.empty() : anonymousBodyType;
     }
 
     @Unmarshal
@@ -94,7 +103,8 @@ public final class NewObject
                      final Marshalled<TypeUsage> type,
                      final Stream<Marshalled<Expression>> args,
                      final Stream<Marshalled<TypeUsage>> typeArguments,
-                     final Optional<Marshalled<Expression>> outerInstance) {
+                     final Optional<Marshalled<Expression>> outerInstance,
+                     final Optional<TypeName> anonymousBodyType) {
         super(codeModel, marshaller, traits);
         this.type = marshaller.unmarshal(type);
         this.args = args == null
@@ -106,6 +116,7 @@ public final class NewObject
         this.outerInstance = outerInstance == null
             ? Optional.empty()
             : outerInstance.map(marshaller::unmarshal);
+        this.anonymousBodyType = anonymousBodyType == null ? Optional.empty() : anonymousBodyType;
     }
 
     @Marshal
@@ -114,12 +125,14 @@ public final class NewObject
                            final Out<Marshalled<TypeUsage>> type,
                            final Out<Stream<Marshalled<Expression>>> args,
                            final Out<Stream<Marshalled<TypeUsage>>> typeArguments,
-                           final Out<Optional<Marshalled<Expression>>> outerInstance) {
+                           final Out<Optional<Marshalled<Expression>>> outerInstance,
+                           final Out<Optional<TypeName>> anonymousBodyType) {
         super.destructor(marshaller, traits);
         type.set(marshaller.marshal(this.type));
         args.set(this.args.stream().map(marshaller::marshal));
         typeArguments.set(this.typeArguments.stream().map(marshaller::marshal));
         outerInstance.set(this.outerInstance.map(marshaller::marshal));
+        anonymousBodyType.set(this.anonymousBodyType);
     }
 
     /**
@@ -158,6 +171,16 @@ public final class NewObject
         return this.outerInstance;
     }
 
+    /**
+     * Obtains the {@link TypeName} of the anonymous type compiled from this expression's class body
+     * (e.g. {@code new Runnable() { ... }}), when it has one.
+     *
+     * @return an {@link Optional} {@link TypeName}
+     */
+    public Optional<TypeName> anonymousBodyType() {
+        return this.anonymousBodyType;
+    }
+
     @Override
     public Stream<? extends Composite> compositeChildren() {
         return Streams.concat(
@@ -175,26 +198,31 @@ public final class NewObject
             && Objects.equals(this.args, other.args)
             && Objects.equals(this.typeArguments, other.typeArguments)
             && Objects.equals(this.outerInstance, other.outerInstance)
+            && Objects.equals(this.anonymousBodyType, other.anonymousBodyType)
             && super.equals(other);
     }
 
     /**
-     * Creates a {@link NewObject} expression with type arguments and an outer-instance qualifier.
+     * Creates a {@link NewObject} expression with type arguments, an outer-instance qualifier, and an
+     * anonymous class body type.
      *
-     * @param codeModel     the {@link CodeModel}
-     * @param type          the resolved {@link TypeUsage} of the class to instantiate
-     * @param args          the constructor argument {@link Expression}s
-     * @param typeArguments the resolved type argument {@link TypeUsage}s
-     * @param outerInstance the outer-instance qualifier {@link Expression}, e.g. {@code outer} in
-     *                      {@code outer.new Inner(args)}
+     * @param codeModel         the {@link CodeModel}
+     * @param type              the resolved {@link TypeUsage} of the class to instantiate
+     * @param args              the constructor argument {@link Expression}s
+     * @param typeArguments     the resolved type argument {@link TypeUsage}s
+     * @param outerInstance     the outer-instance qualifier {@link Expression}, e.g. {@code outer} in
+     *                          {@code outer.new Inner(args)}
+     * @param anonymousBodyType the {@link TypeName} of the anonymous type compiled from this
+     *                          expression's class body, e.g. {@code new Runnable() { ... }}
      * @return a new {@link NewObject}
      */
     public static NewObject of(final CodeModel codeModel,
                                final TypeUsage type,
                                final Stream<Expression> args,
                                final Stream<TypeUsage> typeArguments,
-                               final Optional<Expression> outerInstance) {
-        return new NewObject(codeModel, type, args, typeArguments, outerInstance);
+                               final Optional<Expression> outerInstance,
+                               final Optional<TypeName> anonymousBodyType) {
+        return new NewObject(codeModel, type, args, typeArguments, outerInstance, anonymousBodyType);
     }
 
     /**
@@ -210,21 +238,7 @@ public final class NewObject
                                final TypeUsage type,
                                final Stream<Expression> args,
                                final Stream<TypeUsage> typeArguments) {
-        return new NewObject(codeModel, type, args, typeArguments, null);
-    }
-
-    /**
-     * Creates a {@link NewObject} expression without type arguments.
-     *
-     * @param codeModel the {@link CodeModel}
-     * @param type      the resolved {@link TypeUsage} of the class to instantiate
-     * @param args      the constructor argument {@link Expression}s
-     * @return a new {@link NewObject}
-     */
-    public static NewObject of(final CodeModel codeModel,
-                               final TypeUsage type,
-                               final Stream<Expression> args) {
-        return new NewObject(codeModel, type, args, null, null);
+        return new NewObject(codeModel, type, args, typeArguments, null, null);
     }
 
     static {
