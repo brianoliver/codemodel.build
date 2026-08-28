@@ -30,4 +30,11 @@ public class OuterExample {
 
     public interface NestedInterface {
     }
+
+    public enum NestedEnum {
+        A, B
+    }
+
+    public record NestedRecord(int value) {
+    }
 }
