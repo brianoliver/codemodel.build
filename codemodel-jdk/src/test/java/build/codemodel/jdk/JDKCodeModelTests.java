@@ -10,7 +10,10 @@ import build.codemodel.foundation.usage.NamedTypeUsage;
 import build.codemodel.foundation.usage.TypeVariableUsage;
 import build.codemodel.foundation.usage.WildcardTypeUsage;
 import build.codemodel.hierarchical.descriptor.HierarchicalTypeDescriptor;
+import build.codemodel.jdk.descriptor.AnnotationType;
+import build.codemodel.jdk.descriptor.EnclosingTypeDescriptor;
 import build.codemodel.jdk.descriptor.EnumConstantDescriptor;
+import build.codemodel.jdk.descriptor.EnumType;
 import build.codemodel.jdk.descriptor.Final;
 import build.codemodel.jdk.descriptor.JDKTypeDescriptor;
 import build.codemodel.jdk.descriptor.MemberTypeDescriptor;
@@ -18,6 +21,7 @@ import build.codemodel.jdk.descriptor.NonSealed;
 import build.codemodel.jdk.descriptor.PermitsTypeDescriptor;
 import build.codemodel.jdk.descriptor.ReceiverAnnotation;
 import build.codemodel.jdk.descriptor.RecordComponentDescriptor;
+import build.codemodel.jdk.descriptor.RecordType;
 import build.codemodel.jdk.descriptor.Sealed;
 import build.codemodel.jdk.descriptor.Varargs;
 import build.codemodel.jdk.example.AbstractPerson;
@@ -767,6 +771,10 @@ class JDKCodeModelTests {
         final var codeModel = createCodeModel();
         final var descriptor = codeModel.getJDKTypeDescriptor(ColorExample.class).orElseThrow();
 
+        assertThat(descriptor.hasTrait(EnumType.class))
+            .as("an enum should carry the EnumType kind marker, matching the source-parsing path")
+            .isTrue();
+
         // traits() does not guarantee insertion order (see JDKCodeModelDeclarationOrderTests), so
         // sort by the EnumConstantDescriptor's own order() -- backed by Enum#ordinal() -- rather than
         // relying on stream order
@@ -790,6 +798,10 @@ class JDKCodeModelTests {
     void shouldModelRecordComponentsViaReflection() {
         final var codeModel = createCodeModel();
         final var descriptor = codeModel.getJDKTypeDescriptor(PointExample.class).orElseThrow();
+
+        assertThat(descriptor.hasTrait(RecordType.class))
+            .as("a record should carry the RecordType kind marker, matching the source-parsing path")
+            .isTrue();
 
         final var components = descriptor.traits(RecordComponentDescriptor.class).toList();
 
@@ -817,11 +829,68 @@ class JDKCodeModelTests {
             .as("declared member types should be modeled as MemberTypeDescriptors")
             .containsExactlyInAnyOrder(
                 OuterExample.NestedClass.class.getCanonicalName(),
-                OuterExample.NestedInterface.class.getCanonicalName());
+                OuterExample.NestedInterface.class.getCanonicalName(),
+                OuterExample.NestedEnum.class.getCanonicalName(),
+                OuterExample.NestedRecord.class.getCanonicalName());
 
         // and the nested types themselves should be resolvable as full JDKTypeDescriptors
-        assertThat(codeModel.getJDKTypeDescriptor(OuterExample.NestedClass.class)).isPresent();
-        assertThat(codeModel.getJDKTypeDescriptor(OuterExample.NestedInterface.class)).isPresent();
+        final var nestedClass = codeModel.getJDKTypeDescriptor(OuterExample.NestedClass.class).orElseThrow();
+        final var nestedInterface = codeModel.getJDKTypeDescriptor(OuterExample.NestedInterface.class).orElseThrow();
+
+        // each member type should carry the EnclosingTypeDescriptor back-pointer, matching the
+        // source-parsing path
+        assertThat(nestedClass.hasTrait(EnclosingTypeDescriptor.class)).isTrue();
+        assertThat(nestedInterface.hasTrait(EnclosingTypeDescriptor.class)).isTrue();
+    }
+
+    @Test
+    void shouldModelAnnotationTypeKindViaReflection() {
+        final var codeModel = createCodeModel();
+        final var descriptor = codeModel.getJDKTypeDescriptor(Description.class).orElseThrow();
+
+        assertThat(descriptor.hasTrait(AnnotationType.class))
+            .as("an @interface should carry the AnnotationType kind marker, matching the source-parsing path")
+            .isTrue();
+    }
+
+    @Test
+    void shouldModelKindMarkerAndEnclosingTypeForNestedEnumAndRecordViaReflection() {
+        final var codeModel = createCodeModel();
+
+        final var nestedEnum = codeModel.getJDKTypeDescriptor(OuterExample.NestedEnum.class).orElseThrow();
+        assertThat(nestedEnum.hasTrait(EnumType.class))
+            .as("a nested enum should carry the EnumType kind marker")
+            .isTrue();
+        assertThat(nestedEnum.hasTrait(EnclosingTypeDescriptor.class))
+            .as("a nested enum should also carry the EnclosingTypeDescriptor back-pointer")
+            .isTrue();
+
+        final var nestedRecord = codeModel.getJDKTypeDescriptor(OuterExample.NestedRecord.class).orElseThrow();
+        assertThat(nestedRecord.hasTrait(RecordType.class))
+            .as("a nested record should carry the RecordType kind marker")
+            .isTrue();
+        assertThat(nestedRecord.hasTrait(EnclosingTypeDescriptor.class))
+            .as("a nested record should also carry the EnclosingTypeDescriptor back-pointer")
+            .isTrue();
+    }
+
+    @Test
+    void shouldNotModelEnclosingTypeOrKindMarkersForPlainTopLevelClassViaReflection() {
+        final var codeModel = createCodeModel();
+        final var descriptor = codeModel.getJDKTypeDescriptor(OuterExample.class).orElseThrow();
+
+        assertThat(descriptor.hasTrait(EnclosingTypeDescriptor.class))
+            .as("a top-level type should not carry an EnclosingTypeDescriptor")
+            .isFalse();
+        assertThat(descriptor.hasTrait(EnumType.class))
+            .as("a plain class should not carry the EnumType kind marker")
+            .isFalse();
+        assertThat(descriptor.hasTrait(RecordType.class))
+            .as("a plain class should not carry the RecordType kind marker")
+            .isFalse();
+        assertThat(descriptor.hasTrait(AnnotationType.class))
+            .as("a plain class should not carry the AnnotationType kind marker")
+            .isFalse();
     }
 
     /**

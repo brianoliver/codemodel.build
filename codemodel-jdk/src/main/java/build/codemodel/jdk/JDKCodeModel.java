@@ -53,9 +53,12 @@ import build.codemodel.foundation.usage.TypeUsage;
 import build.codemodel.foundation.usage.TypeVariableUsage;
 import build.codemodel.foundation.usage.UnknownTypeUsage;
 import build.codemodel.foundation.usage.WildcardTypeUsage;
+import build.codemodel.jdk.descriptor.AnnotationType;
 import build.codemodel.jdk.descriptor.ConstructorType;
 import build.codemodel.jdk.descriptor.Default;
+import build.codemodel.jdk.descriptor.EnclosingTypeDescriptor;
 import build.codemodel.jdk.descriptor.EnumConstantDescriptor;
+import build.codemodel.jdk.descriptor.EnumType;
 import build.codemodel.jdk.descriptor.FieldType;
 import build.codemodel.jdk.descriptor.Final;
 import build.codemodel.jdk.descriptor.InitializerBlockDescriptor;
@@ -69,6 +72,7 @@ import build.codemodel.jdk.descriptor.NonSealed;
 import build.codemodel.jdk.descriptor.PermitsTypeDescriptor;
 import build.codemodel.jdk.descriptor.ReceiverAnnotation;
 import build.codemodel.jdk.descriptor.RecordComponentDescriptor;
+import build.codemodel.jdk.descriptor.RecordType;
 import build.codemodel.jdk.descriptor.Sealed;
 import build.codemodel.jdk.descriptor.Static;
 import build.codemodel.jdk.descriptor.Strictfp;
@@ -530,6 +534,24 @@ public class JDKCodeModel
 
         // include the JDKType in the TypeDescriptor
         typeDescriptor.addTrait(new JDKType(classType));
+
+        // include the type-kind marker (annotation/enum/record), mirroring the source-parsing path,
+        // which derives it from the ElementKind
+        if (classType.isAnnotation()) {
+            typeDescriptor.addTrait(AnnotationType.ANNOTATION_TYPE);
+        } else if (classType.isEnum()) {
+            typeDescriptor.addTrait(EnumType.ENUM);
+        } else if (classType.isRecord()) {
+            typeDescriptor.addTrait(RecordType.RECORD);
+        }
+
+        // include the EnclosingTypeDescriptor back-pointer for a member type, mirroring the
+        // source-parsing path (which adds it whenever the enclosing element is a type). Local and
+        // anonymous classes are excluded, matching both that path and getDeclaredClasses() below.
+        if (classType.isMemberClass()) {
+            typeDescriptor.addTrait(new EnclosingTypeDescriptor(
+                getNameProvider().getTypeName(classType.getEnclosingClass())));
+        }
 
         final var classModifier = classType.getModifiers();
 
