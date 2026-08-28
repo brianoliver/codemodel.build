@@ -804,7 +804,19 @@ class InjectionContext
 
         if (binding == null) {
             // obtain the concrete Class for the Dependency
-            final var concreteClass = resolveClassFrom(dependency);
+            final Optional<Class<T>> concreteClassOptional = resolveClassFrom(dependency);
+            if (concreteClassOptional.isEmpty()) {
+                // the Dependency does not name a class resolvable on this loader. For a top-level
+                // request (no requiredBy) return empty so create(Class)'s own fallback — which holds
+                // the caller's real Class reference — can take over; create(Dependency)/create(TypeUsage)
+                // will still surface UnsatisfiedDependencyException via orElseThrow. A nested @Inject
+                // dependency has no Class in hand, so it must fail here.
+                if (requiredBy.isEmpty()) {
+                    return Optional.empty();
+                }
+                throw new UnsatisfiedDependencyException(dependency);
+            }
+            final Class<T> concreteClass = concreteClassOptional.get();
 
             // obtain the TypeDescriptor for the Dependency
             final var typeDescriptor = codeModel.getJDKTypeDescriptor(concreteClass)
@@ -823,7 +835,7 @@ class InjectionContext
                 return Optional.of(new ResolvableClass<T>(
                     requiredBy,
                     dependency,
-                    (Class<? extends T>) concreteClass)
+                    concreteClass)
                     .resolve());
             }
         }
@@ -832,22 +844,30 @@ class InjectionContext
     }
 
     /**
-     * Attempts to obtain the {@link Class} represented by the {@link Dependency}.
+     * Attempts to obtain the {@link Class} represented by the {@link Dependency} by name, using this
+     * module's classloader.
+     *
+     * <p>Returns an empty {@link Optional} rather than throwing when the {@link Dependency} does not
+     * name a resolvable class (it is not a {@link NamedTypeUsage}, or {@link Class#forName} cannot see
+     * it on this loader). A top-level {@code create(Class)} still holds the caller's real
+     * {@link Class} reference and has its own fallback, so {@link #getValue} returns empty for that
+     * case and lets the fallback take over; a nested dependency has no such reference and fails there
+     * instead.
      *
      * @param dependency the {@link Dependency}
      * @param <T>        the type of {@link Class}
      * @return the {@link Optional} {@link Class}
      */
     @SuppressWarnings("unchecked")
-    private <T> Class<T> resolveClassFrom(final Dependency dependency) {
+    private <T> Optional<Class<T>> resolveClassFrom(final Dependency dependency) {
         if (dependency.typeUsage() instanceof NamedTypeUsage namedTypeUsage) {
             try {
-                return (Class<T>) Class.forName(namedTypeUsage.typeName().binaryName());
+                return Optional.of((Class<T>) Class.forName(namedTypeUsage.typeName().binaryName()));
             } catch (final ClassNotFoundException e) {
-                throw new UnsatisfiedDependencyException(dependency, e);
+                return Optional.empty();
             }
         } else {
-            throw new UnsatisfiedDependencyException(dependency, "Failed to determine Class");
+            return Optional.empty();
         }
     }
 
