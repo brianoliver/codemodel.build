@@ -13,12 +13,16 @@ import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import org.junit.jupiter.api.Test;
 
+import java.lang.classfile.ClassFile;
+import java.lang.constant.ClassDesc;
+import java.lang.constant.ConstantDescs;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -439,6 +443,83 @@ class InjectionContextTests
         @Inject
         ChainRootService(final ChainMiddleService middle) {
         }
+    }
+
+    /**
+     * Ensure {@code create(Class)} can instantiate a class that is <em>not</em> resolvable by name on the
+     * dependency-injection module's own classloader (e.g. a build-script or plugin class loaded by a
+     * foreign loader). {@code getValue} must not abort resolution when {@code Class.forName} misses — the
+     * top-level {@code create(Class)} still holds the caller's real {@link Class} reference and its
+     * fallback should take over.
+     */
+    @Test
+    void shouldCreateClassNotResolvableByNameOnTheModuleLoader() {
+        final var foreignClass = loadForeignInjectableClass();
+
+        final var context = createInjectionFramework().newContext();
+
+        final var instance = context.create(foreignClass);
+
+        assertThat(instance)
+            .isNotNull();
+        assertThat(instance.getClass())
+            .isSameAs(foreignClass);
+    }
+
+    /**
+     * Ensure the non-{@code Class} entry points still fail loudly when a top-level {@link Dependency}
+     * names a type that {@code Class.forName} cannot resolve on this module's loader. Unlike
+     * {@code create(Class)}, {@code create(TypeUsage)} / {@code create(Dependency)} hold no real
+     * {@link Class} reference to fall back on, so {@code getValue} returning empty must surface as an
+     * {@link UnsatisfiedDependencyException} rather than a {@code null} result.
+     */
+    @Test
+    void shouldThrowWhenTopLevelTypeUsageNamesAnUnresolvableClass() {
+        final var framework = createInjectionFramework();
+        final var foreignClass = loadForeignInjectableClass();
+
+        final var typeUsage = framework.codeModel().getTypeUsage(foreignClass);
+        final var context = framework.newContext();
+
+        assertThrows(UnsatisfiedDependencyException.class, () -> context.create(typeUsage));
+    }
+
+    /**
+     * Synthesizes a class with a single public no-arg constructor into a throwaway {@link ClassLoader},
+     * so that it exists only in that loader and is invisible to {@link Class#forName} on the
+     * dependency-injection module's own loader (e.g. a build-script or plugin class loaded by a foreign
+     * loader).
+     *
+     * @return the synthesized {@link Class}, loaded by a foreign loader
+     */
+    private Class<?> loadForeignInjectableClass() {
+        final var className = "ForeignInjectable";
+        final var bytecode = ClassFile.of().build(ClassDesc.of(className), classBuilder ->
+            classBuilder.withMethodBody(
+                ConstantDescs.INIT_NAME,
+                ConstantDescs.MTD_void,
+                ClassFile.ACC_PUBLIC,
+                codeBuilder -> codeBuilder
+                    .aload(0)
+                    .invokespecial(ConstantDescs.CD_Object, ConstantDescs.INIT_NAME, ConstantDescs.MTD_void)
+                    .return_()));
+
+        final var foreignLoader = new ClassLoader(getClass().getClassLoader()) {
+            @Override
+            protected Class<?> findClass(final String name) throws ClassNotFoundException {
+                if (name.equals(className)) {
+                    return defineClass(name, bytecode, 0, bytecode.length);
+                }
+                throw new ClassNotFoundException(name);
+            }
+        };
+
+        final var foreignClass = assertDoesNotThrow(() -> Class.forName(className, true, foreignLoader));
+
+        // sanity: the DI module's loader genuinely cannot see it by name
+        assertThrows(ClassNotFoundException.class, () -> Class.forName(className));
+
+        return foreignClass;
     }
 
     /**
