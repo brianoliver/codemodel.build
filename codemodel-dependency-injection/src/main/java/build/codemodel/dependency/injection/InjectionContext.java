@@ -83,6 +83,15 @@ class InjectionContext
     private final Resolver<Object> resolver;
 
     /**
+     * {@link #resolver} without the {@link #resolveEmptyMultiBinding} last resort. This is what a child
+     * {@link Context} inherits from this one via {@link #newContext()}: the child appends its own single
+     * {@link #resolveEmptyMultiBinding} at the very end of its chain, so that across the whole
+     * parent/child composition the empty-collection synthesis stays strictly last — behind every real
+     * resolver, this context's and the child's alike.
+     */
+    private final Resolver<Object> chainableResolver;
+
+    /**
      * The {@link ChainedResolver} of {@link Resolver}s added to this {@link InjectionContext}.
      */
     private final ChainedResolver chainedResolver;
@@ -106,11 +115,14 @@ class InjectionContext
         this.multiBindings = new ConcurrentHashMap<>();
         this.chainedResolver = ChainedResolver.create();
         this.bindingGraphContributor = injectionFramework.bindingGraphContributor();
-        this.resolver = ChainedResolver.create(
+        this.chainableResolver = ChainedResolver.create(
             dependency -> (Optional<Binding<Object>>) (Optional<?>) Dependency.resolve(
                 dependency, this.bindingsByDependency, this.injectionFramework.codeModel()),
             dependency -> (Optional<Binding<Object>>) (Optional<?>) resolveMultiBinding(dependency),
             chainedResolver);
+        this.resolver = ChainedResolver.create(
+            this.chainableResolver,
+            dependency -> (Optional<Binding<Object>>) (Optional<?>) resolveEmptyMultiBinding(dependency));
     }
 
     @Override
@@ -432,41 +444,83 @@ class InjectionContext
 
     /**
      * Attempts to resolve a multibinding for collection types ({@link Set}, {@link Collection},
-     * {@link Iterable}, {@link java.util.stream.Stream}, {@link List}).
+     * {@link Iterable}, {@link java.util.stream.Stream}, {@link List}) from the contributions
+     * registered on <em>this</em> context via {@code bindSet}.
+     *
+     * <p>Returns empty when the element type was never registered here, so the rest of the
+     * {@link Resolver} chain — user-added resolvers and any parent context's resolver — gets a
+     * chance to satisfy the injection point. {@link #resolveEmptyMultiBinding} is the last link in
+     * that chain and supplies an empty collection only once everything else has declined.
      *
      * @param dependency the {@link Dependency} to resolve
-     * @return the resolved {@link Binding}, or empty if not a supported collection multibinding
+     * @return the resolved {@link Binding}, or empty if this is not a supported collection type or its
+     *         element type was never registered here via {@code bindSet}
      */
     @SuppressWarnings("unchecked")
     private Optional<? extends Binding<?>> resolveMultiBinding(final Dependency dependency) {
-        if (!(dependency.typeUsage() instanceof GenericTypeUsage generic)) {
+        if (!(dependency.typeUsage() instanceof GenericTypeUsage generic)
+            || !isSupportedCollection(generic.typeName().canonicalName())) {
             return Optional.empty();
         }
 
         final String rawName = generic.typeName().canonicalName();
-        if (!Set.class.getCanonicalName().equals(rawName)
-            && !Collection.class.getCanonicalName().equals(rawName)
-            && !Iterable.class.getCanonicalName().equals(rawName)
-            && !Stream.class.getCanonicalName().equals(rawName)
-            && !List.class.getCanonicalName().equals(rawName)) {
-            return Optional.empty();
-        }
-
         return generic.parameters().findFirst()
             .flatMap(elementTypeUsage -> {
                 final var elementDependency = IndependentDependency.of(elementTypeUsage, _ -> Stream.empty());
                 return (Optional<MultiBindingEntry<Object>>) (Optional<?>) Dependency.resolve(
                     elementDependency, this.multiBindings, this.injectionFramework.codeModel());
             })
-            .map(entry -> switch (rawName) {
-                case "java.util.Set" -> ValueBinding.of(dependency, (Object) entry.buildSet());
-                case "java.util.Collection", "java.lang.Iterable" ->
-                    ValueBinding.of(dependency, (Object) (Collection<?>) entry.buildSet());
-                case "java.util.List" -> ValueBinding.of(dependency, (Object) List.copyOf(entry.buildSet()));
-                case "java.util.stream.Stream" ->
-                    new SupplierBinding<>(dependency, (Supplier<Object>) () -> entry.buildSet().stream());
-                default -> null;
-            });
+            .map(entry -> buildCollectionBinding(dependency, rawName, entry));
+    }
+
+    /**
+     * Fallback multibinding resolver placed at the end of the {@link Resolver} chain: a supported
+     * collection injection point whose element type was never registered via {@code bindSet} — here
+     * or in any parent context — and which no other resolver could satisfy is bound to an empty
+     * collection rather than reported as an unsatisfied dependency.
+     *
+     * @param dependency the {@link Dependency} to resolve
+     * @return an empty-collection {@link Binding}, or empty if not a supported collection type
+     */
+    private Optional<? extends Binding<?>> resolveEmptyMultiBinding(final Dependency dependency) {
+        if (!(dependency.typeUsage() instanceof GenericTypeUsage generic)
+            || !isSupportedCollection(generic.typeName().canonicalName())) {
+            return Optional.empty();
+        }
+
+        return Optional.of(
+            buildCollectionBinding(dependency, generic.typeName().canonicalName(), new MultiBindingEntry<>()));
+    }
+
+    /**
+     * Whether the given raw canonical type name is one of the five collection types the multibinding
+     * system can inject: {@link Set}, {@link Collection}, {@link Iterable}, {@link java.util.stream.Stream},
+     * {@link List}.
+     */
+    private static boolean isSupportedCollection(final String rawName) {
+        return Set.class.getCanonicalName().equals(rawName)
+            || Collection.class.getCanonicalName().equals(rawName)
+            || Iterable.class.getCanonicalName().equals(rawName)
+            || Stream.class.getCanonicalName().equals(rawName)
+            || List.class.getCanonicalName().equals(rawName);
+    }
+
+    /**
+     * Builds the {@link Binding} that presents the given {@link MultiBindingEntry}'s contributions as
+     * the collection shape requested by {@code rawName}.
+     */
+    private static Binding<?> buildCollectionBinding(final Dependency dependency,
+                                                     final String rawName,
+                                                     final MultiBindingEntry<Object> entry) {
+        return switch (rawName) {
+            case "java.util.Set" -> ValueBinding.of(dependency, (Object) entry.buildSet());
+            case "java.util.Collection", "java.lang.Iterable" ->
+                ValueBinding.of(dependency, (Object) (Collection<?>) entry.buildSet());
+            case "java.util.List" -> ValueBinding.of(dependency, (Object) List.copyOf(entry.buildSet()));
+            case "java.util.stream.Stream" ->
+                new SupplierBinding<>(dependency, (Supplier<Object>) () -> entry.buildSet().stream());
+            default -> throw new IllegalStateException("Unsupported collection type: " + rawName);
+        };
     }
 
     @Override
@@ -605,9 +659,12 @@ class InjectionContext
     /**
      * Returns {@code true} if the given {@link Dependency} can be satisfied — either by an explicit or
      * multibinding already registered, or by an auto-bindable {@link jakarta.inject.Singleton} class.
+     * A supported collection injection point ({@code Set}, {@code Collection}, {@code Iterable},
+     * {@code Stream}, {@code List}) is always satisfiable — it resolves to an empty collection when
+     * nothing was contributed — so {@link #validate()} never reports one as unsatisfied.
      */
     private boolean isResolvable(final Dependency dependency) {
-        if (resolver().resolve(dependency).isPresent()) {
+        if (this.resolver.resolve(dependency).isPresent()) {
             return true;
         }
         // auto-singleton: a @Singleton class that can be bound on-demand
@@ -759,7 +816,7 @@ class InjectionContext
 
     @Override
     public Context newContext() {
-        return this.injectionFramework.newContext(this.resolver());
+        return this.injectionFramework.newContext(this.chainableResolver);
     }
 
     /**
@@ -776,7 +833,7 @@ class InjectionContext
 
         final var codeModel = this.injectionFramework.codeModel();
 
-        final var binding = resolver()
+        final var binding = this.resolver
             .resolve(dependency)
             .orElse(null);
 

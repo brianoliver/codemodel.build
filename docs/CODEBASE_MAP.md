@@ -769,7 +769,6 @@ context.close()                     // Graphs.topologicalSort reversed over inst
 - **Track-2 graph fields are stubs** — `WiringReportCompiler`/`snapshot` are no-ops unless `InjectionFramework.withBindingGraph()` was installed **before** the context was created (the contributor is captured at `InjectionContext` construction).
 - **`ScopedValueScope` bindings throw if resolved outside `run`/`call`** — no implicit/default scope.
 - **Multibinding resolution keys elements with an empty qualifier extractor** — qualifiers on multibound element types are ignored.
-- `resolveMultiBinding` NPEs if you inject `Set<Foo>`/`List<Foo>` for a type never registered via `bindSet(Foo.class)` — no null-check fallback to empty.
 
 **Dependencies:** `jakarta.inject-api`; `base-foundation` (transitive), `base-configuration`, `base-graph`, `base-telemetry` (transitive); `codemodel-foundation` (transitive), `codemodel-objectoriented`, `codemodel-jdk` (transitive), `codemodel-framework`.
 **Depended on by:** `codemodel-framework-builder`, `codemodel-jdk-annotation-processor`.
@@ -1090,7 +1089,6 @@ Non-obvious behaviours that are working as designed but will surprise you.
 - Custom scopes require both a `@ScopeAnnotation`-meta-annotated annotation **and** a `Scope` impl registered via `bindScope`. As of the custom-scope fix this is honored consistently across all `ClassBinding`-construction paths.
 - `@PreDestroy` is only invoked on singleton/custom-scoped instances actually created during the context's lifetime; `close()` tears down singleton + custom-scoped instances together in one combined reverse-topological order.
 - `InjectionContext`'s `bindSet`-first-registration and `@Singleton` auto-registration are race-safe (single atomic `compute`; losing threads swallow `BindingAlreadyExistsException` and retry) — any *new* register-if-absent logic must follow the same pattern.
-- `resolveMultiBinding` NPEs if you inject `Set<Foo>`/`List<Foo>` for a type never registered via `bindSet(Foo.class)`.
 - `validate()`'s scope-violation / unsatisfied checks only traverse `ClassBinding` edges — value/supplier/provider bindings are invisible to it.
 - `DuplicateQualifierException` fires at binding-key construction time (#162).
 - `TypeLiteral` must be subclassed with a concrete type argument or its constructor throws (#149).

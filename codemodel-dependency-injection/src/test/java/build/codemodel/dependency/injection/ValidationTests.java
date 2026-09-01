@@ -28,6 +28,7 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -103,6 +104,12 @@ class ValidationTests
         RequestScopedDep requestScopedDep;
     }
 
+    @Singleton
+    static class MultibindingConsumer {
+        @Inject
+        Set<Integer> values;
+    }
+
     static final AtomicInteger eagerInitCount = new AtomicInteger(0);
 
     @Singleton
@@ -169,6 +176,22 @@ class ValidationTests
         assertThatThrownBy(context::validate)
             .isInstanceOf(ValidationException.class)
             .hasMessageContaining("MissingDep");
+    }
+
+    /**
+     * A supported collection injection point ({@code Set<Integer>}) is always satisfiable, whether or
+     * not its element type was ever declared via {@code bindSet}: {@link Context#validate()} passes
+     * and the runtime injects an empty collection. A collection dependency is never an unsatisfied
+     * dependency.
+     */
+    @Test
+    void shouldPassValidationForUndeclaredMultibinding() {
+        final var context = createInjectionFramework().newContext();
+        context.bind(MultibindingConsumer.class).to(MultibindingConsumer.class);
+        // bindSet(Integer.class) is NEVER called
+
+        assertThatCode(context::validate).doesNotThrowAnyException();
+        assertThat(context.create(MultibindingConsumer.class).values).isEmpty();
     }
 
     // ---- scope violation detection ----
