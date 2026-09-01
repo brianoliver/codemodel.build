@@ -20,6 +20,8 @@ package build.codemodel.dependency.injection;
  * #L%
  */
 
+import build.codemodel.foundation.usage.GenericTypeUsage;
+import build.codemodel.foundation.usage.NamedTypeUsage;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.junit.jupiter.api.Disabled;
@@ -27,6 +29,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
 
@@ -148,6 +151,126 @@ class MultibindingTests
         final var holder = context.inject(new ListHolder());
 
         assertThat(holder.values).containsExactlyInAnyOrder("a", "b", "c");
+    }
+
+    // ---- unregistered element type ----
+
+    static class UnregisteredHolder {
+        @Inject
+        Set<Integer> values;
+    }
+
+    static class UnregisteredCollectionHolder {
+        @Inject
+        Collection<Integer> values;
+    }
+
+    static class UnregisteredIterableHolder {
+        @Inject
+        Iterable<Integer> values;
+    }
+
+    static class UnregisteredListHolder {
+        @Inject
+        List<Integer> values;
+    }
+
+    static class UnregisteredStreamHolder {
+        @Inject
+        Stream<Integer> values;
+    }
+
+    /**
+     * A {@code Set<T>} injection point whose element type was never registered via
+     * {@link Binder#bindSet} must resolve to an empty set rather than failing to resolve the
+     * dependency: an unpopulated multibinding yields an empty collection.
+     */
+    @Test
+    void shouldInjectEmptySetWhenElementTypeNeverBound() {
+        final var context = createInjectionFramework().newContext();
+        context.bindSet(String.class).add("a");
+
+        final var holder = context.inject(new UnregisteredHolder());
+
+        assertThat(holder.values).isEmpty();
+    }
+
+    /**
+     * The empty-collection fallback applies to every supported collection shape, not just
+     * {@code Set}: an unregistered element type yields an empty {@code Collection}, {@code Iterable},
+     * {@code List}, and {@code Stream} too.
+     */
+    @Test
+    void shouldInjectEmptyCollectionsWhenElementTypeNeverBound() {
+        final var context = createInjectionFramework().newContext();
+
+        assertThat(context.inject(new UnregisteredCollectionHolder()).values).isEmpty();
+        assertThat(context.inject(new UnregisteredIterableHolder()).values).isEmpty();
+        assertThat(context.inject(new UnregisteredListHolder()).values).isEmpty();
+        assertThat(context.inject(new UnregisteredStreamHolder()).values).isEmpty();
+    }
+
+    /**
+     * Multibinding contributions registered on a parent context must remain visible to a child
+     * context created via {@link Context#newContext()}: the child's own (empty) multibinding
+     * registry must not shadow the parent's contributions with an empty collection.
+     */
+    @Test
+    void shouldInheritMultibindingsFromParentContext() {
+        final var parent = createInjectionFramework().newContext();
+        parent.bindSet(String.class).add("a").add("b");
+
+        final var child = parent.newContext();
+        final var holder = child.inject(new SetHolder());
+
+        assertThat(holder.values).containsExactlyInAnyOrder("a", "b");
+    }
+
+    /**
+     * A user-added {@link Resolver} that supplies a collection type must win over the empty-collection
+     * fallback: the fallback is the last link in the resolver chain and only applies once every other
+     * resolver has declined.
+     */
+    @Test
+    void shouldPreferCustomResolverOverEmptyMultibindingFallback() {
+        final var context = createInjectionFramework().newContext();
+        context.addResolver(Resolver.of(dependency -> isSetOf(dependency, Integer.class)
+            ? Optional.<Binding<Object>>of(ValueBinding.of(dependency, (Object) Set.of(1, 2, 3)))
+            : Optional.empty()));
+
+        final var holder = context.inject(new UnregisteredHolder());
+
+        assertThat(holder.values).containsExactlyInAnyOrder(1, 2, 3);
+    }
+
+    /**
+     * A {@link Resolver} added to a <em>child</em> context must win over the empty-collection fallback
+     * inherited from its parent: the parent is chained ahead of the child's own resolvers, so its
+     * fallback must not be consulted before them. Only the child's single trailing fallback applies,
+     * once every resolver — parent and child — has declined.
+     */
+    @Test
+    void shouldPreferChildResolverOverParentEmptyMultibindingFallback() {
+        final var parent = createInjectionFramework().newContext();
+        final var child = parent.newContext();
+        child.addResolver(Resolver.of(dependency -> isSetOf(dependency, Integer.class)
+            ? Optional.<Binding<Object>>of(ValueBinding.of(dependency, (Object) Set.of(1, 2, 3)))
+            : Optional.empty()));
+
+        final var holder = child.inject(new UnregisteredHolder());
+
+        assertThat(holder.values).containsExactlyInAnyOrder(1, 2, 3);
+    }
+
+    private static boolean isSetOf(final Dependency dependency, final Class<?> elementType) {
+        return dependency.typeUsage() instanceof GenericTypeUsage generic
+            && Set.class.getCanonicalName().equals(generic.typeName().canonicalName())
+            && generic.parameters().findFirst()
+                .filter(NamedTypeUsage.class::isInstance)
+                .map(NamedTypeUsage.class::cast)
+                .map(named -> named.typeName().canonicalName())
+                .filter(elementType.getCanonicalName()::equals)
+                .isPresent();
     }
 
     // ---- cross-module merging ----
