@@ -34,8 +34,8 @@ import build.codemodel.foundation.naming.TypeName;
 import build.codemodel.hierarchical.descriptor.HierarchicalTypeDescriptor;
 import build.codemodel.hierarchical.descriptor.ParentTypeDescriptor;
 
-import java.util.LinkedHashSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.stream.Stream;
 
 /**
@@ -51,18 +51,28 @@ public abstract class AbstractHierarchicalCodeModel
     /**
      * The <i>parent</i> {@link TypeName}s for which one or more <i>child</i> {@link HierarchicalTypeDescriptor}s
      * require them, but as yet the {@link HierarchicalTypeDescriptor} for the said <i>parent</i> is unknown.
+     * <p>
+     * The set values are {@link CopyOnWriteArraySet}s: a shared {@link HierarchicalCodeModel} is populated from
+     * multiple threads (e.g. concurrent {@code spin} module compiles), so {@link #children(HierarchicalTypeDescriptor)}
+     * / {@link #parents(HierarchicalTypeDescriptor)} can stream a set while another thread is adding an edge to it.
+     * {@link CopyOnWriteArraySet} gives those readers a stable, insertion-ordered snapshot with no synchronization
+     * instead of a {@link java.util.ConcurrentModificationException}.
      */
-    private ConcurrentHashMap<TypeName, LinkedHashSet<HierarchicalTypeDescriptor>> orphanedChildren;
+    private ConcurrentHashMap<TypeName, CopyOnWriteArraySet<HierarchicalTypeDescriptor>> orphanedChildren;
 
     /**
      * The <i>parent</i> {@link HierarchicalTypeDescriptor}s by <i>child</i> {@link HierarchicalTypeDescriptor}.
+     * <p>
+     * See {@link #orphanedChildren} for why the set values are {@link CopyOnWriteArraySet}s.
      */
-    private ConcurrentHashMap<HierarchicalTypeDescriptor, LinkedHashSet<HierarchicalTypeDescriptor>> parents;
+    private ConcurrentHashMap<HierarchicalTypeDescriptor, CopyOnWriteArraySet<HierarchicalTypeDescriptor>> parents;
 
     /**
      * The <i>child</i> {@link HierarchicalTypeDescriptor}s by <i>parents</i> {@link HierarchicalTypeDescriptor}.
+     * <p>
+     * See {@link #orphanedChildren} for why the set values are {@link CopyOnWriteArraySet}s.
      */
-    private ConcurrentHashMap<HierarchicalTypeDescriptor, LinkedHashSet<HierarchicalTypeDescriptor>> children;
+    private ConcurrentHashMap<HierarchicalTypeDescriptor, CopyOnWriteArraySet<HierarchicalTypeDescriptor>> children;
 
     /**
      * Constructs an empty {@link AbstractHierarchicalCodeModel}.
@@ -165,23 +175,8 @@ public abstract class AbstractHierarchicalCodeModel
     void onCreatedParentTypeDescriptor(final HierarchicalTypeDescriptor parentTypeDescriptor,
                                        final HierarchicalTypeDescriptor childTypeDescriptor) {
 
-        this.children.compute(parentTypeDescriptor, (_, existing) -> {
-            final var children = existing == null
-                ? new LinkedHashSet<HierarchicalTypeDescriptor>()
-                : existing;
-
-            children.add(childTypeDescriptor);
-            return children;
-        });
-
-        this.parents.compute(childTypeDescriptor, (_, existing) -> {
-            final var parents = existing == null
-                ? new LinkedHashSet<HierarchicalTypeDescriptor>()
-                : existing;
-
-            parents.add(parentTypeDescriptor);
-            return parents;
-        });
+        addEdge(this.children, parentTypeDescriptor, childTypeDescriptor);
+        addEdge(this.parents, childTypeDescriptor, parentTypeDescriptor);
     }
 
     /**
@@ -194,15 +189,7 @@ public abstract class AbstractHierarchicalCodeModel
     void onOrphanedChildTypeDescriptor(final TypeName parentTypeName,
                                        final HierarchicalTypeDescriptor childTypeDescriptor) {
 
-        this.orphanedChildren.compute(parentTypeName, (_, existing) -> {
-            final var children = existing == null
-                ? new LinkedHashSet<HierarchicalTypeDescriptor>()
-                : existing;
-
-            children.add(childTypeDescriptor);
-
-            return children;
-        });
+        addEdge(this.orphanedChildren, parentTypeName, childTypeDescriptor);
     }
 
     /**
@@ -220,39 +207,55 @@ public abstract class AbstractHierarchicalCodeModel
             .map(HierarchicalTypeDescriptor.class::cast)
             .ifPresentOrElse(parentTypeDescriptor -> {
                     // remove the child TypeDescriptor from the Parent TypeDescriptor
-                    this.children.compute(parentTypeDescriptor, (_, existing) -> {
-                        if (existing == null) {
-                            return null;
-                        }
-
-                        existing.remove(childTypeDescriptor);
-
-                        return existing.isEmpty() ? null : existing;
-                    });
+                    removeEdge(this.children, parentTypeDescriptor, childTypeDescriptor);
 
                     // remove the parent TypeDescriptor from child TypeDescriptor (parents)
-                    this.parents.compute(childTypeDescriptor, (_, existing) -> {
-                        if (existing == null) {
-                            return null;
-                        }
-
-                        existing.remove(parentTypeDescriptor);
-
-                        return existing.isEmpty() ? null : existing;
-                    });
+                    removeEdge(this.parents, childTypeDescriptor, parentTypeDescriptor);
                 },
-                () -> {
+                () ->
                     // attempt to remove the child from orphaned
-                    this.orphanedChildren.compute(parentTypeName, (_, existing) -> {
-                        if (existing == null) {
-                            return null;
-                        }
+                    removeEdge(this.orphanedChildren, parentTypeName, childTypeDescriptor));
+    }
 
-                        existing.remove(childTypeDescriptor);
+    /**
+     * Adds {@code element} to the set stored under {@code key}, creating the {@link CopyOnWriteArraySet} on first use.
+     * The get-or-create and the {@code add} happen inside a single {@link ConcurrentHashMap#compute} so a concurrent
+     * {@link #removeEdge} on the same key can't drop the entry between them.
+     *
+     * @param map     the map to mutate
+     * @param key     the key whose set {@code element} is added to
+     * @param element the element to add
+     * @param <K>     the key type
+     */
+    private static <K> void addEdge(final ConcurrentHashMap<K, CopyOnWriteArraySet<HierarchicalTypeDescriptor>> map,
+                                    final K key,
+                                    final HierarchicalTypeDescriptor element) {
 
-                        return existing.isEmpty() ? null : existing;
-                    });
-                });
+        map.compute(key, (_, existing) -> {
+            final var set = existing == null ? new CopyOnWriteArraySet<HierarchicalTypeDescriptor>() : existing;
+            set.add(element);
+            return set;
+        });
+    }
+
+    /**
+     * Removes {@code element} from the set stored under {@code key}, dropping the map entry entirely once its set
+     * becomes empty (the {@code parents}/{@code children}/{@code orphanedChildren} maps hold no empty sets - an absent
+     * key and an empty set are treated identically by the readers).
+     *
+     * @param map     the map to mutate
+     * @param key     the key whose set {@code element} is removed from
+     * @param element the element to remove
+     * @param <K>     the key type
+     */
+    private static <K> void removeEdge(final ConcurrentHashMap<K, CopyOnWriteArraySet<HierarchicalTypeDescriptor>> map,
+                                       final K key,
+                                       final HierarchicalTypeDescriptor element) {
+
+        map.computeIfPresent(key, (_, set) -> {
+            set.remove(element);
+            return set.isEmpty() ? null : set;
+        });
     }
 
     /**

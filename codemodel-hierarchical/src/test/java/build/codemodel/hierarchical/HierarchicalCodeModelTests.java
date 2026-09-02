@@ -13,7 +13,11 @@ import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -749,5 +753,69 @@ class HierarchicalCodeModelTests {
         assertThatThrownBy(() -> descriptorA.getAncestor(_ -> false))
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("Cycle");
+    }
+
+    /**
+     * Ensure that reading a type's {@code parents()} / {@code children()} while other threads are concurrently
+     * establishing new parent-child edges (as happens when a shared {@link HierarchicalCodeModel} is populated from
+     * multiple threads) does not throw {@link java.util.ConcurrentModificationException}.
+     *
+     * <p>Before the {@code parents}/{@code children} maps stored copy-on-write snapshots, each value was a
+     * {@link LinkedHashSet} mutated in place under {@code compute}, while readers streamed that same set with no
+     * synchronization - an intermittent CME thrown deep inside DI resolution's ancestor walk during concurrent
+     * {@code spin} module compiles.</p>
+     */
+    @Test
+    void shouldReadHierarchyConcurrentlyWithEdgeCreation() throws Exception {
+        final var codeModel = createEmptyCodeModel();
+        final var nameProvider = codeModel.getNameProvider();
+
+        final var parentName = nameProvider.getTypeName("ConcurrentParent");
+        final var parentUsage = SpecificTypeUsage.of(codeModel, parentName);
+        final var parent = codeModel
+            .createTypeDescriptor(parentName, (_, n) -> new ClassTypeDescriptor(codeModel, n));
+
+        final var childCount = 500;
+
+        // pre-create every child descriptor; the racing operation is purely the addTrait(Extends) edge creation
+        final var children = IntStream.range(0, childCount)
+            .mapToObj(i -> codeModel.createTypeDescriptor(
+                nameProvider.getTypeName("ConcurrentChild" + i),
+                (_, n) -> new ClassTypeDescriptor(codeModel, n)))
+            .toList();
+
+        final var readerCount = 4;
+        final var barrier = new CyclicBarrier(readerCount + 1);
+        final var writing = new AtomicBoolean(true);
+        final var failures = new CopyOnWriteArrayList<Throwable>();
+
+        final var readers = IntStream.range(0, readerCount)
+            .mapToObj(_ -> Thread.ofVirtual().unstarted(() -> {
+                try {
+                    barrier.await();
+                    while (writing.get()) {
+                        parent.children().forEach(c -> c.typeName().name());
+                        children.forEach(c -> c.ancestors().forEach(a -> a.typeName().name()));
+                    }
+                } catch (final Throwable t) {
+                    failures.add(t);
+                }
+            }))
+            .toList();
+
+        readers.forEach(Thread::start);
+        barrier.await();
+
+        for (final var child : children) {
+            child.addTrait(Extends.of(parentUsage));
+        }
+
+        writing.set(false);
+        for (final var reader : readers) {
+            reader.join();
+        }
+
+        assertThat(failures).isEmpty();
+        assertThat(parent.children()).hasSize(childCount);
     }
 }
