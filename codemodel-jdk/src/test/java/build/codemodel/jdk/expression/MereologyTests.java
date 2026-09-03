@@ -80,6 +80,17 @@ class MereologyTests {
     }
 
     @Test
+    void methodInvocationTypeWitnessesAppearInParts() {
+        final var target = num(1);
+        final var arg = num(2);
+        final var receiverType = stringType();
+        final var witness = codeModel.getTypeUsage(Integer.class);
+        final var expr = MethodInvocation.of(codeModel, Optional.of(target), "toString",
+            Stream.of(arg), Optional.of(receiverType), Stream.of(witness));
+        assertThat(expr.parts().toList()).containsExactlyInAnyOrder(target, arg, receiverType, witness);
+    }
+
+    @Test
     void methodInvocationWithoutTargetOrReceiverPartsContainsOnlyArgs() {
         final var arg = num(42);
         final var expr = MethodInvocation.of(codeModel, Optional.empty(), "foo",
@@ -116,6 +127,16 @@ class MereologyTests {
         final var qualifierType = stringType();
         final var expr = MethodReference.of(qualifier, "toString", Optional.of(qualifierType));
         assertThat(expr.parts().toList()).containsExactlyInAnyOrder(qualifier, qualifierType);
+    }
+
+    @Test
+    void methodReferenceTypeWitnessesAppearInParts() {
+        final var qualifier = num(1);
+        final var qualifierType = stringType();
+        final var witness = codeModel.getTypeUsage(Integer.class);
+        final var expr = MethodReference.of(qualifier, "toString", Optional.of(qualifierType),
+            Stream.of(witness));
+        assertThat(expr.parts().toList()).containsExactlyInAnyOrder(qualifier, qualifierType, witness);
     }
 
     // -------------------------------------------------------------------------
@@ -220,6 +241,17 @@ class MereologyTests {
         final var typeArg = codeModel.getTypeUsage(Integer.class);
         final var expr = NewObject.of(codeModel, type, Stream.of(arg), Stream.of(typeArg));
         assertThat(expr.parts().toList()).containsExactlyInAnyOrder(type, arg, typeArg);
+    }
+
+    @Test
+    void newObjectTypeWitnessesAppearInPartsAndAreDistinctFromTypeArguments() {
+        final var type = stringType();
+        final var arg = num(1);
+        final var typeArg = codeModel.getTypeUsage(Integer.class);
+        final var witness = codeModel.getTypeUsage(Long.class);
+        final var expr = NewObject.of(codeModel, type, Stream.of(arg), Stream.of(typeArg),
+            Optional.empty(), Optional.empty(), Stream.of(witness));
+        assertThat(expr.parts().toList()).containsExactlyInAnyOrder(type, arg, typeArg, witness);
     }
 
     // -------------------------------------------------------------------------

@@ -649,8 +649,9 @@ public class JdkExpressionConverter
         final var args = t.getArguments().stream()
             .map(this::convert)
             .toList();
+        final var typeWitnesses = resolveTypeWitnesses(t.getTypeArguments());
         final var invocation = MethodInvocation.of(codeModel, Optional.ofNullable(target), methodName,
-            args.stream(), receiverType);
+            args.stream(), receiverType, typeWitnesses.stream());
         resolveMethod(t).ifPresent(invocation::addTrait);
         addSourceLocation(t).ifPresent(invocation::addTrait);
         return invocation;
@@ -660,6 +661,25 @@ public class JdkExpressionConverter
         return resolveTypeMirror(typeTree)
             .map(typeResolver)
             .orElseGet(() -> UnknownTypeUsage.create(codeModel));
+    }
+
+    /**
+     * Resolves an explicit type-witness list (e.g. the {@code <String>} in {@code obj.<String>m()},
+     * {@code Qualifier::<String>m}, or {@code new <String>Foo()}) into {@link TypeUsage}s, attaching a
+     * {@link build.codemodel.jdk.populator.descriptor.SourceLocation} to each. Returns an empty list
+     * when no witnesses were written.
+     */
+    private List<TypeUsage> resolveTypeWitnesses(final List<? extends Tree> witnessTrees) {
+        if (witnessTrees == null || witnessTrees.isEmpty()) {
+            return List.of();
+        }
+        return witnessTrees.stream()
+            .map(witnessTree -> {
+                final var witnessType = resolveTypeUsage(witnessTree);
+                addSourceLocation(witnessTree).ifPresent(witnessType::addTrait);
+                return witnessType;
+            })
+            .toList();
     }
 
     private Optional<TypeUsage> resolveLambdaParameterType(final VariableTree p) {
@@ -737,7 +757,9 @@ public class JdkExpressionConverter
             ? Optional.<Expression>empty()
             : Optional.of(convert(t.getEnclosingExpression()));
         final var anonymousBodyType = resolveLocalTypeName(t.getClassBody());
-        final var newObject = NewObject.of(codeModel, type, args.stream(), typeArgs.stream(), outerInstance, anonymousBodyType);
+        final var typeWitnesses = resolveTypeWitnesses(t.getTypeArguments());
+        final var newObject = NewObject.of(codeModel, type, args.stream(), typeArgs.stream(),
+            outerInstance, anonymousBodyType, typeWitnesses.stream());
         addSourceLocation(t).ifPresent(newObject::addTrait);
         return newObject;
     }
@@ -991,7 +1013,8 @@ public class JdkExpressionConverter
         final var reference = MethodReference.of(
             convert(qualifierExpr),
             t.getName().toString(),
-            resolveReceiverType(qualifierExpr));
+            resolveReceiverType(qualifierExpr),
+            resolveTypeWitnesses(t.getTypeArguments()).stream());
         resolveMethod(t).ifPresent(reference::addTrait);
         addSourceLocation(t).ifPresent(reference::addTrait);
         return reference;

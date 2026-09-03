@@ -35,8 +35,10 @@ import build.codemodel.foundation.descriptor.Trait;
 import build.codemodel.foundation.usage.TypeUsage;
 
 import java.lang.invoke.MethodHandles;
+import java.util.ArrayList;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -63,13 +65,23 @@ public final class MethodReference
      */
     private final Optional<TypeUsage> qualifierType;
 
+    /**
+     * The explicit type witnesses supplied before the method name (e.g. {@code <String>} in
+     * {@code Qualifier::<String>method}), empty when none were written.
+     */
+    private final ArrayList<TypeUsage> typeWitnesses;
+
     private MethodReference(final Expression qualifier,
                             final String methodName,
-                            final Optional<TypeUsage> qualifierType) {
+                            final Optional<TypeUsage> qualifierType,
+                            final Stream<TypeUsage> typeWitnesses) {
         super(Objects.requireNonNull(qualifier, "qualifier must not be null").codeModel());
         this.qualifier = qualifier;
         this.methodName = Objects.requireNonNull(methodName, "methodName must not be null");
         this.qualifierType = qualifierType == null ? Optional.empty() : qualifierType;
+        this.typeWitnesses = typeWitnesses == null
+            ? new ArrayList<>()
+            : typeWitnesses.collect(Collectors.toCollection(ArrayList::new));
     }
 
     @Unmarshal
@@ -78,11 +90,15 @@ public final class MethodReference
                            final Stream<Marshalled<Trait>> traits,
                            final Marshalled<Expression> qualifier,
                            final String methodName,
-                           final Optional<Marshalled<TypeUsage>> qualifierType) {
+                           final Optional<Marshalled<TypeUsage>> qualifierType,
+                           final Stream<Marshalled<TypeUsage>> typeWitnesses) {
         super(codeModel, marshaller, traits);
         this.qualifier = marshaller.unmarshal(qualifier);
         this.methodName = methodName;
         this.qualifierType = qualifierType == null ? Optional.empty() : qualifierType.map(marshaller::unmarshal);
+        this.typeWitnesses = typeWitnesses == null
+            ? new ArrayList<>()
+            : typeWitnesses.map(marshaller::unmarshal).collect(Collectors.toCollection(ArrayList::new));
     }
 
     @Marshal
@@ -90,11 +106,13 @@ public final class MethodReference
                            final Out<Stream<Marshalled<Trait>>> traits,
                            final Out<Marshalled<Expression>> qualifier,
                            final Out<String> methodName,
-                           final Out<Optional<Marshalled<TypeUsage>>> qualifierType) {
+                           final Out<Optional<Marshalled<TypeUsage>>> qualifierType,
+                           final Out<Stream<Marshalled<TypeUsage>>> typeWitnesses) {
         super.destructor(marshaller, traits);
         qualifier.set(marshaller.marshal(this.qualifier));
         methodName.set(this.methodName);
         qualifierType.set(this.qualifierType.map(marshaller::marshal));
+        typeWitnesses.set(this.typeWitnesses.stream().map(marshaller::marshal));
     }
 
     /**
@@ -124,9 +142,21 @@ public final class MethodReference
         return this.qualifierType;
     }
 
+    /**
+     * Obtains the explicit type witnesses supplied before the method name (e.g. {@code <String>} in
+     * {@code Qualifier::<String>method}).
+     *
+     * @return a {@link Stream} of type witness {@link TypeUsage}s, empty when none were written
+     */
+    public Stream<TypeUsage> typeWitnesses() {
+        return this.typeWitnesses.stream();
+    }
+
     @Override
     public Stream<? extends Composite> compositeChildren() {
-        return Stream.concat(Stream.of(qualifier), qualifierType.stream());
+        return Stream.concat(
+            Stream.concat(Stream.of(qualifier), qualifierType.stream()),
+            typeWitnesses.stream());
     }
 
     @Override
@@ -135,11 +165,12 @@ public final class MethodReference
             && Objects.equals(this.qualifier, other.qualifier)
             && Objects.equals(this.methodName, other.methodName)
             && Objects.equals(this.qualifierType, other.qualifierType)
+            && Objects.equals(this.typeWitnesses, other.typeWitnesses)
             && super.equals(other);
     }
 
     /**
-     * Creates a {@link MethodReference} expression.
+     * Creates a {@link MethodReference} expression with no explicit type witnesses.
      *
      * @param qualifier     the qualifier {@link Expression}
      * @param methodName    the simple name of the referenced method
@@ -149,7 +180,24 @@ public final class MethodReference
     public static MethodReference of(final Expression qualifier,
                                      final String methodName,
                                      final Optional<TypeUsage> qualifierType) {
-        return new MethodReference(qualifier, methodName, qualifierType);
+        return new MethodReference(qualifier, methodName, qualifierType, null);
+    }
+
+    /**
+     * Creates a {@link MethodReference} expression.
+     *
+     * @param qualifier     the qualifier {@link Expression}
+     * @param methodName    the simple name of the referenced method
+     * @param qualifierType the resolved type of the qualifier, if available
+     * @param typeWitnesses the explicit type witnesses supplied before the method name (e.g.
+     *                      {@code <String>} in {@code Qualifier::<String>method})
+     * @return a new {@link MethodReference}
+     */
+    public static MethodReference of(final Expression qualifier,
+                                     final String methodName,
+                                     final Optional<TypeUsage> qualifierType,
+                                     final Stream<TypeUsage> typeWitnesses) {
+        return new MethodReference(qualifier, methodName, qualifierType, typeWitnesses);
     }
 
     static {
