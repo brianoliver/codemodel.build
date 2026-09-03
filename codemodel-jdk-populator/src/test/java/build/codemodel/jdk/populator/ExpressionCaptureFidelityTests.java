@@ -32,6 +32,8 @@ import build.codemodel.jdk.expression.BitwiseOperator;
 import build.codemodel.jdk.expression.CompoundAssignment;
 import build.codemodel.jdk.expression.Identifier;
 import build.codemodel.jdk.expression.InstanceOf;
+import build.codemodel.jdk.expression.MethodInvocation;
+import build.codemodel.jdk.expression.MethodReference;
 import build.codemodel.jdk.expression.NewArray;
 import build.codemodel.jdk.expression.NewObject;
 import build.codemodel.jdk.expression.PostfixOperator;
@@ -148,6 +150,203 @@ class ExpressionCaptureFidelityTests {
         assertThat(typeArgs).hasSize(1);
         assertThat(typeArgs.getFirst()).isInstanceOf(NamedTypeUsage.class);
         assertThat(((NamedTypeUsage) typeArgs.getFirst()).typeName().canonicalName()).isEqualTo("java.lang.String");
+    }
+
+    @Test
+    void shouldCaptureMethodInvocationTypeWitnesses() {
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.Widgets", """
+                package build.codemodel.jdk.example;
+                import java.util.Collections;
+                import java.util.List;
+                public class Widgets {
+                    public List<String> empty() {
+                        return Collections.<String>emptyList();
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.Widgets");
+        final var invocation = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(MethodInvocation.class)
+            .findFirst()
+            .orElseThrow();
+
+        final var witnesses = invocation.typeWitnesses().toList();
+        assertThat(witnesses).hasSize(1);
+        assertThat(witnesses.getFirst()).isInstanceOf(NamedTypeUsage.class);
+        assertThat(((NamedTypeUsage) witnesses.getFirst()).typeName().canonicalName())
+            .isEqualTo("java.lang.String");
+        assertThat(witnesses.getFirst().getTrait(SourceLocation.FilePosition.class))
+            .as("each type witness carries its own source position")
+            .isPresent();
+    }
+
+    @Test
+    void shouldCaptureMultipleMethodInvocationTypeWitnessesInOrder() {
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.Pairs", """
+                package build.codemodel.jdk.example;
+                import java.util.Map;
+                public class Pairs {
+                    public Map.Entry<String, Integer> one() {
+                        return Map.<String, Integer>entry("a", 1);
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.Pairs");
+        final var invocation = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(MethodInvocation.class)
+            .findFirst()
+            .orElseThrow();
+
+        final var witnesses = invocation.typeWitnesses().toList();
+        assertThat(witnesses)
+            .extracting(w -> ((NamedTypeUsage) w).typeName().canonicalName())
+            .containsExactly("java.lang.String", "java.lang.Integer");
+        assertThat(witnesses).allSatisfy(w ->
+            assertThat(w.getTrait(SourceLocation.FilePosition.class)).isPresent());
+    }
+
+    @Test
+    void shouldCaptureMethodReferenceTypeWitnesses() {
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.Refs", """
+                package build.codemodel.jdk.example;
+                import java.util.List;
+                import java.util.function.Function;
+                public class Refs {
+                    public Function<Object[], List<String>> f() {
+                        return Refs::<String>wrap;
+                    }
+                    static <T> List<T> wrap(Object[] a) {
+                        return null;
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.Refs");
+        final var reference = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(MethodReference.class)
+            .findFirst()
+            .orElseThrow();
+
+        final var witnesses = reference.typeWitnesses().toList();
+        assertThat(witnesses).hasSize(1);
+        assertThat(witnesses.getFirst()).isInstanceOf(NamedTypeUsage.class);
+        assertThat(((NamedTypeUsage) witnesses.getFirst()).typeName().canonicalName())
+            .isEqualTo("java.lang.String");
+        assertThat(witnesses.getFirst().getTrait(SourceLocation.FilePosition.class))
+            .as("each type witness carries its own source position")
+            .isPresent();
+    }
+
+    @Test
+    void shouldCaptureConstructorReferenceTypeWitnesses() {
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.CtorRefs", """
+                package build.codemodel.jdk.example;
+                import java.util.function.Function;
+                public class CtorRefs {
+                    static final class Box {
+                        <T> Box(T seed) {
+                        }
+                    }
+                    public Function<Object, Box> f() {
+                        return Box::<String>new;
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.CtorRefs");
+        final var reference = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(MethodReference.class)
+            .findFirst()
+            .orElseThrow();
+
+        final var witnesses = reference.typeWitnesses().toList();
+        assertThat(witnesses).hasSize(1);
+        assertThat(witnesses.getFirst()).isInstanceOf(NamedTypeUsage.class);
+        assertThat(((NamedTypeUsage) witnesses.getFirst()).typeName().canonicalName())
+            .isEqualTo("java.lang.String");
+        assertThat(witnesses.getFirst().getTrait(SourceLocation.FilePosition.class))
+            .as("each type witness carries its own source position")
+            .isPresent();
+    }
+
+    @Test
+    void shouldCaptureNewObjectConstructorTypeWitnesses() {
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.Maker", """
+                package build.codemodel.jdk.example;
+                public class Maker {
+                    <T> Maker(T seed) {
+                    }
+                    public static Maker make() {
+                        return new <String>Maker("x");
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.Maker");
+        final var newObject = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(NewObject.class)
+            .findFirst()
+            .orElseThrow();
+
+        final var witnesses = newObject.typeWitnesses().toList();
+        assertThat(witnesses).hasSize(1);
+        assertThat(witnesses.getFirst()).isInstanceOf(NamedTypeUsage.class);
+        assertThat(((NamedTypeUsage) witnesses.getFirst()).typeName().canonicalName())
+            .isEqualTo("java.lang.String");
+        assertThat(newObject.typeArguments())
+            .as("constructor type witnesses are distinct from the instantiated type's own arguments")
+            .isEmpty();
+        assertThat(witnesses.getFirst().getTrait(SourceLocation.FilePosition.class))
+            .as("each type witness carries its own source position")
+            .isPresent();
+    }
+
+    @Test
+    void shouldLeaveTypeWitnessesEmptyWhenNoneWritten() {
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.Plain", """
+                package build.codemodel.jdk.example;
+                import java.util.Collections;
+                import java.util.List;
+                public class Plain {
+                    public List<String> empty() {
+                        return Collections.emptyList();
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.Plain");
+        final var invocation = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(MethodInvocation.class)
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(invocation.typeWitnesses()).isEmpty();
     }
 
     @Test

@@ -78,12 +78,20 @@ public final class NewObject
      */
     private final Optional<TypeName> anonymousBodyType;
 
+    /**
+     * The explicit type witnesses supplied to the constructor (e.g. {@code <String>} in
+     * {@code new <String>Foo()}), empty when none were written. Distinct from
+     * {@link #typeArguments} (the instantiated type's own generic arguments).
+     */
+    private final ArrayList<TypeUsage> typeWitnesses;
+
     private NewObject(final CodeModel codeModel,
                       final TypeUsage type,
                       final Stream<Expression> args,
                       final Stream<TypeUsage> typeArguments,
                       final Optional<Expression> outerInstance,
-                      final Optional<TypeName> anonymousBodyType) {
+                      final Optional<TypeName> anonymousBodyType,
+                      final Stream<TypeUsage> typeWitnesses) {
         super(codeModel);
         this.type = Objects.requireNonNull(type, "type must not be null");
         this.args = args == null
@@ -94,6 +102,9 @@ public final class NewObject
             : typeArguments.collect(Collectors.toCollection(ArrayList::new));
         this.outerInstance = outerInstance == null ? Optional.empty() : outerInstance;
         this.anonymousBodyType = anonymousBodyType == null ? Optional.empty() : anonymousBodyType;
+        this.typeWitnesses = typeWitnesses == null
+            ? new ArrayList<>()
+            : typeWitnesses.collect(Collectors.toCollection(ArrayList::new));
     }
 
     @Unmarshal
@@ -104,7 +115,8 @@ public final class NewObject
                      final Stream<Marshalled<Expression>> args,
                      final Stream<Marshalled<TypeUsage>> typeArguments,
                      final Optional<Marshalled<Expression>> outerInstance,
-                     final Optional<TypeName> anonymousBodyType) {
+                     final Optional<TypeName> anonymousBodyType,
+                     final Stream<Marshalled<TypeUsage>> typeWitnesses) {
         super(codeModel, marshaller, traits);
         this.type = marshaller.unmarshal(type);
         this.args = args == null
@@ -117,6 +129,9 @@ public final class NewObject
             ? Optional.empty()
             : outerInstance.map(marshaller::unmarshal);
         this.anonymousBodyType = anonymousBodyType == null ? Optional.empty() : anonymousBodyType;
+        this.typeWitnesses = typeWitnesses == null
+            ? new ArrayList<>()
+            : typeWitnesses.map(marshaller::unmarshal).collect(Collectors.toCollection(ArrayList::new));
     }
 
     @Marshal
@@ -126,13 +141,15 @@ public final class NewObject
                            final Out<Stream<Marshalled<Expression>>> args,
                            final Out<Stream<Marshalled<TypeUsage>>> typeArguments,
                            final Out<Optional<Marshalled<Expression>>> outerInstance,
-                           final Out<Optional<TypeName>> anonymousBodyType) {
+                           final Out<Optional<TypeName>> anonymousBodyType,
+                           final Out<Stream<Marshalled<TypeUsage>>> typeWitnesses) {
         super.destructor(marshaller, traits);
         type.set(marshaller.marshal(this.type));
         args.set(this.args.stream().map(marshaller::marshal));
         typeArguments.set(this.typeArguments.stream().map(marshaller::marshal));
         outerInstance.set(this.outerInstance.map(marshaller::marshal));
         anonymousBodyType.set(this.anonymousBodyType);
+        typeWitnesses.set(this.typeWitnesses.stream().map(marshaller::marshal));
     }
 
     /**
@@ -181,13 +198,25 @@ public final class NewObject
         return this.anonymousBodyType;
     }
 
+    /**
+     * Obtains the explicit type witnesses supplied to the constructor (e.g. {@code <String>} in
+     * {@code new <String>Foo()}). Distinct from {@link #typeArguments()} (the instantiated type's
+     * own generic arguments).
+     *
+     * @return a {@link Stream} of type witness {@link TypeUsage}s, empty when none were written
+     */
+    public Stream<TypeUsage> typeWitnesses() {
+        return this.typeWitnesses.stream();
+    }
+
     @Override
     public Stream<? extends Composite> compositeChildren() {
         return Streams.concat(
             Stream.of(type),
             args.stream(),
             typeArguments.stream(),
-            outerInstance.stream()
+            outerInstance.stream(),
+            typeWitnesses.stream()
         );
     }
 
@@ -199,6 +228,7 @@ public final class NewObject
             && Objects.equals(this.typeArguments, other.typeArguments)
             && Objects.equals(this.outerInstance, other.outerInstance)
             && Objects.equals(this.anonymousBodyType, other.anonymousBodyType)
+            && Objects.equals(this.typeWitnesses, other.typeWitnesses)
             && super.equals(other);
     }
 
@@ -222,7 +252,34 @@ public final class NewObject
                                final Stream<TypeUsage> typeArguments,
                                final Optional<Expression> outerInstance,
                                final Optional<TypeName> anonymousBodyType) {
-        return new NewObject(codeModel, type, args, typeArguments, outerInstance, anonymousBodyType);
+        return new NewObject(codeModel, type, args, typeArguments, outerInstance, anonymousBodyType, null);
+    }
+
+    /**
+     * Creates a {@link NewObject} expression with type arguments, an outer-instance qualifier, an
+     * anonymous class body type, and explicit constructor type witnesses.
+     *
+     * @param codeModel         the {@link CodeModel}
+     * @param type              the resolved {@link TypeUsage} of the class to instantiate
+     * @param args              the constructor argument {@link Expression}s
+     * @param typeArguments     the resolved type argument {@link TypeUsage}s
+     * @param outerInstance     the outer-instance qualifier {@link Expression}, e.g. {@code outer} in
+     *                          {@code outer.new Inner(args)}
+     * @param anonymousBodyType the {@link TypeName} of the anonymous type compiled from this
+     *                          expression's class body, e.g. {@code new Runnable() { ... }}
+     * @param typeWitnesses     the explicit type witnesses supplied to the constructor, e.g.
+     *                          {@code <String>} in {@code new <String>Foo()}
+     * @return a new {@link NewObject}
+     */
+    public static NewObject of(final CodeModel codeModel,
+                               final TypeUsage type,
+                               final Stream<Expression> args,
+                               final Stream<TypeUsage> typeArguments,
+                               final Optional<Expression> outerInstance,
+                               final Optional<TypeName> anonymousBodyType,
+                               final Stream<TypeUsage> typeWitnesses) {
+        return new NewObject(codeModel, type, args, typeArguments, outerInstance, anonymousBodyType,
+            typeWitnesses);
     }
 
     /**
@@ -238,7 +295,7 @@ public final class NewObject
                                final TypeUsage type,
                                final Stream<Expression> args,
                                final Stream<TypeUsage> typeArguments) {
-        return new NewObject(codeModel, type, args, typeArguments, null, null);
+        return new NewObject(codeModel, type, args, typeArguments, null, null, null);
     }
 
     static {
