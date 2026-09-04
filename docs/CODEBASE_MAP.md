@@ -63,7 +63,7 @@ graph TB
 
 - **Module rename (#124):** every module took a `codemodel-` prefix (`jdk-codemodel` → `codemodel-jdk`, `expression-codemodel` → `codemodel-expression`, `dependency-injection` → `codemodel-dependency-injection`, etc.). Maven `artifactId`s and directory names changed; **most** Java package names did **not** — the exception is DI, whose package moved `build.codemodel.injection` → `build.codemodel.dependency.injection`.
 - **New module `codemodel-jdk-populator` (#125):** the entire javac source-parsing pipeline (`JdkInitializer`, `TypeMirrorResolver`, `JdkExpressionConverter`, `JdkStatementConverter`, `SourceLocation`) was extracted out of `codemodel-jdk` into its own module. `codemodel-jdk` no longer has any `javax.tools` / `com.sun.*` dependency. `SourceLocation` now lives at `build.codemodel.jdk.populator.descriptor.SourceLocation`.
-- `codemodel-jdk`'s reflection path gained enum constants, record components, nested types, sealed/permits, and remaining modifier traits (#150, #152). `TypeUsages.isCompatible` — a JLS-correct wildcard/generic assignability engine — was added (#165) and is consumed by DI (#166).
+- `codemodel-jdk`'s reflection path gained enum constants, record components, nested types, sealed/permits, and remaining modifier traits (#150, #152). `TypeUsages.isAssignable` — a JLS-correct wildcard/generic subtyping engine (originally added as `isCompatible` in #165, later restructured into `isAssignable`/`contains`) — is consumed by DI (#166).
 - DI gained `TypeLiteral` binding (#149), wildcard-bearing dependency resolution (#166), qualified `@Provides` resolution (#162–#164).
 - `objectoriented` split `MethodDescriptor.signature()` into a display `signature()` and an `overrideKey()` (#134) and added the `DeclarationOrder` trait (#133).
 - `foundation` made trait singularity explicit with `@Singular`/`@NonSingular` (#141), made `AnnotationValue.Value` variants real marshalled records (#116, losslessly round-tripping `ClassRef`/`EnumConstant`), and strips the synthetic `java.lang` prefix from primitive `canonicalName()` (#142).
@@ -418,7 +418,7 @@ Marker interfaces (`ArithmeticExpression`, `BinaryArithmeticExpression`, `UnaryA
 - `JDKCodeModel(NameProvider)` — `@Inject` constructor; `initialize()` seeds foundation types (primitives, wrappers, `String`, `Number`, `Object`, `Enum`, `Record`, `Throwable`, …).
 - Reflection query API: `getTypeUsage(...)` overloads (`AnnotatedType`, `Parameter`, `Type`+`Annotation...`), `getNamedTypeUsage(...)`, `getJDKTypeDescriptor(Type | Class | TypeName | TypeUsage | String binaryName)`, `getAnnotations`/`getAnnotation`, `getTraitsInHierarchy(JDKTypeDescriptor, Class<T>)`, `referencesTo(TypeName [, ReferenceKind])`.
 - `JDKModuleDescriptor.parse(CodeModel, Reader|String)` / `.extract(CodeModel, Path)` / `.extractFresh(CodeModel, Path)`.
-- `TypeUsages` static utilities (`isCompatible`, `isAssignable`, `getJDKTypeName`, `getClass`, `isPrimitive`, …).
+- `TypeUsages` static utilities (`isAssignable`, `getJDKTypeName`, `getClass`, `isPrimitive`, …).
 
 **Packages:** `build.codemodel.jdk` (`JDKCodeModel`, `TypeUsages`, `ImportedTypeNames`, `ReferenceKind`, `TypeReference`); `.descriptor` (44 trait types); `.expression` (28 node types + operator enums + `Symbol`, `ResolvedMethod`, `LambdaParameter`); `.statement` (18 node types). `module-info` is an `open module`; `requires transitive` foundation + expression + imperative + objectoriented.
 
@@ -428,7 +428,7 @@ Marker interfaces (`ArithmeticExpression`, `BinaryArithmeticExpression`, `UnaryA
 |---|---|
 | `JDKCodeModel` | Reflection-based `ObjectOrientedCodeModel`. Builds `TypeUsage` graphs from `Type`/`AnnotatedType`; BFS type discovery over supers/interfaces/member types; populates constructor/method/field/enum-constant/record-component/member-type descriptors and modifier traits; `referencesTo` scan; type-variable self-reference guard via a `ThreadLocal` in-progress map. |
 | `JDKModuleDescriptor` | `AbstractModuleDescriptor` for a JPMS module. Three creation paths funnel through private idempotent `addRequires`/`addExports`/`addOpens`/`addProvides`/`addUses` helpers. Includes an inline `build.base.parsing.Scanner`-based `module-info.java` parser and a ClassFile-API `ModuleAttribute` extractor. `include(other)` merges directives with per-type dedup. |
-| `TypeUsages` | Static helpers over `TypeUsage`: `isPrimitive`, `isBoolean`, `getJDKTypeName`, `getVariableTypeDeclaration`, `getClass`/`getThreadContextClass`/`getSystemClass`/`getPlatformClass`, `getFirstTypeParameterClass`, and the JLS assignability engine `isCompatible`/`isAssignable` (#165). |
+| `TypeUsages` | Static helpers over `TypeUsage`: `isPrimitive`, `isBoolean`, `getJDKTypeName`, `getVariableTypeDeclaration`, `getClass`/`getThreadContextClass`/`getSystemClass`/`getPlatformClass`, `getFirstTypeParameterClass`, and the JLS subtyping engine `isAssignable` (generic-aware; delegates raw-hierarchy checks to private `isErasedSubtype`, argument containment to private `contains`) (#165). |
 | `ImportedTypeNames` | Mutable set of importable `TypeName`s keyed by simple `IrreducibleName`; `include()` returns **`false`** (not an exception) on a simple-name collision (forcing FQN); `stream()` sorted. |
 | `ReferenceKind` | enum: `EXTENDS`, `IMPLEMENTS`, `FIELD_TYPE`, `RETURN_TYPE`, `PARAMETER_TYPE`, `METHOD_BODY`. |
 | `TypeReference` | `record (TypeDescriptor owner, ReferenceKind kind, Optional<Trait> member)`; `of(owner,kind)` for type-level, `of(owner,kind,member)` for member-level. |
@@ -509,19 +509,21 @@ Iterates every `JDKTypeDescriptor` in the model, `flatMap`s `referencesIn(td, ty
 
 Containment: `typeUsageContains` checks the `TypeUsage` then `traverse(NamedTypeUsage.class).strategy(DepthFirst)`. `compositeContains` traverses a `Composite` for `NamedTypeUsage` **`.exclude(ResolvedMethod.class::isInstance)`** (#140) — without this, `ResolvedMethod.iterator()` descends into the live-resolved `MethodDescriptor` (its declaring type, parameter types) which never appears literally at the call site, producing spurious references. `Symbol.Field` needs no exclusion (its `iterator()` yields only the access expression's own `declaredType`).
 
-**`TypeUsages.isCompatible` (#165):**
+**`TypeUsages.isAssignable` (#165; single public entry point since the `isCompatible`/`isAssignable` restructure):**
 ```java
-static boolean isCompatible(TypeUsage requested, TypeUsage candidate, JDKCodeModel codeModel)
-static boolean isAssignable(TypeUsage from, TypeUsage to, JDKCodeModel codeModel)
+static boolean isAssignable(TypeUsage subtype, TypeUsage supertype, JDKCodeModel codeModel)
 ```
-JLS-correct "can `candidate` stand in where `requested` is expected", with proper wildcard/generic-argument handling:
-- `requested` a `WildcardTypeUsage` → check candidate against upper/lower bounds; wildcard-vs-wildcard via JLS 4.5.1 containment (`? super S` only contained by `? super C` with `S` assignable to `C`; `? extends S`/unbounded `?` compare effective upper bounds).
-- `candidate` a wildcard but `requested` not → `false`.
-- `requested` not a `GenericTypeUsage` → plain covariant `isAssignable`.
-- Same raw type both sides → pairwise `isArgumentCompatible` (**invariant**: a concrete non-wildcard `requested` type argument requires an **exact canonical-name match** per JLS 4.5.1; wildcards relaxed; a raw `candidate` is compatible with any parameterization).
-- Different raw types → compatible only if `candidate` is raw and erasure-assignable (conservative).
+JLS 4.10 "is `subtype` a subtype of `supertype`" — generic-aware, `(subtype, supertype)` argument order throughout:
+- `supertype` a `WildcardTypeUsage` → dispatched to `contains` (treated as a type-argument-position construct).
+- `subtype` a wildcard but `supertype` not → `false`.
+- `supertype` not a `GenericTypeUsage`, or a raw one with no arguments → erased raw-hierarchy subtyping via private `isErasedSubtype`.
+- Otherwise → `instantiatedSupertype` substitutes `subtype`'s reified arguments (JLS 4.10.2) through the intervening generic supertypes to the instantiation of `supertype`'s raw type that `subtype` implements, then `argumentsContained` compares positionally. Unreachable → a raw `subtype` falls back to `isErasedSubtype`, a concretely-parameterized one is rejected (conservative).
 
-`isAssignable`: identical `TypeName` → true; else loads either side into the model on demand via `getJDKTypeDescriptor(TypeName)` and calls `fromDescriptor.isAssignableTo(toDescriptor)`; a type with no loadable `Class` is treated as not-assignable rather than failing. **Consumed by `codemodel-dependency-injection` #166.**
+Private helpers:
+- `contains(container, contained)` — JLS 4.5.1 type-argument containment (i.e. `Foo<contained> <: Foo<container>`). Non-wildcard `container` contains only itself (`isSameArgument`: invariant, recursing for a parameterized argument, raw usage matches any parameterization). Wildcard cases: `? super S` contains `? super C` iff `S <: C`; `? extends S`/unbounded `?` compare effective upper bounds; recurses into `isAssignable` for the bounds so nested generics inside bounds are compared properly (not by erasure).
+- `isErasedSubtype(subtype, supertype)` — raw class/interface hierarchy only. Identical `TypeName` → true; else loads either side into the model on demand via `getJDKTypeDescriptor(TypeName)` and calls `subtypeDescriptor.isAssignableTo(supertypeDescriptor)`; a type with no loadable `Class` is treated as not-a-subtype rather than failing.
+
+**Consumed by `codemodel-dependency-injection` #166** (`Dependency.resolve` wildcard fallback).
 
 **`JDKModuleDescriptor` creation paths:**
 1. **`parse(CodeModel, Reader|String)`** — self-contained `build.base.parsing.Scanner` tokenizer. Skips leading `import`s; captures leading annotations as `AnnotationTypeUsage` traits (args consumed and discarded, only the name kept); handles `open module <name> { … }`; loops over `requires [static|transitive]`, `exports … [to …]`, `opens … [to …]`, `uses …`, `provides … with …`; throws `ParseException` on anything else. **Registered** in the model via `createModuleDescriptor`.
@@ -567,7 +569,7 @@ Type-variable resolution uses a `ThreadLocal<Map<TypeVariable, TypeVariableUsage
 - Unbounded `?` reports `[Object]` from `getAnnotatedUpperBounds()` — explicitly treated as "no upper bound".
 - `Executable.getAnnotatedReceiverType()` never returns null; for static methods / top-level constructors it returns an unannotated type, so `addReceiverAnnotations` is a silent no-op there.
 - `referencesTo` **excludes `ResolvedMethod`** from composite traversal (#140).
-- `TypeUsages.isAssignable` silently treats an unloadable type as not-assignable rather than throwing — a purely source-modelled type with no runtime class will never be reported compatible.
+- `TypeUsages.isAssignable` (via private `isErasedSubtype`) silently treats an unloadable type as not-a-subtype rather than throwing — a purely source-modelled type with no runtime class will never be reported a subtype.
 - `ImportedTypeNames.include` returns `false` (not an exception) on a simple-name clash; callers must fall back to FQN.
 - `JDKModuleDescriptor.extractFresh` does NOT register the descriptor — `getModuleDescriptor` won't find it.
 - `JDKCodeModel.getJDKTypeDescriptor(TypeName|String)` lazily `loadClass`es on demand and scans — a side-effecting "getter"; `String binaryName` resolution tries the unnamed module first, then every known module, first match wins.
@@ -710,7 +712,7 @@ JdkInitializer.rescan(JDKCodeModel, List<JavaFileObject> updatedFiles, List<Java
 | `MultiBinder<T>` | Accumulator from `Binder.bindSet(Class)`; `add(value|Class|Supplier)`. Repeated `bindSet` for a type returns the same underlying entry — accumulates across modules. Supported injectable collection raw types: `Set`, `Collection`, `Iterable`, `Stream`, `List` (hard-coded). |
 | `Binder` / `BindingBuilder` / `AbstractBindingBuilder` | `bind(Class)`, `bind(TypeLiteral)`, `bindSet(Class)`, `install(Module)`. Fluent `to(value|Class|Supplier)`, `toOverriding(...)`, `as(String)` (→ `@Named`), `with(Class|Annotation|AnnotationTypeUsage)` (qualifier), `asAllInterfaces()` / `asAllInterfaces(Predicate)`. `as`/`with` stamp `@Named`/qualifier `AnnotationTypeUsage` traits directly onto the key `TypeUsage`. |
 | `TypeLiteral<T>` | `abstract` (#149) — captures a fully-parameterized `java.lang.reflect.Type` via anonymous-subclass `getGenericSuperclass()`; ctor throws `IllegalArgumentException` if not subclassed with a concrete arg. `bind(new TypeLiteral<List<Person>>(){}).to(people)` registers a key distinct from raw `List`. |
-| `Dependency` / `AbstractDependency` / `IndependentDependency` / `InjectionPointDependency` | Interface `typeUsage()` + `signature()`. `signatureOf(typeUsage, qualifierAnnotations)` is canonical + order-stable and throws `DuplicateQualifierException` on a duplicate qualifier type (#162). `resolve(requested, Map<Dependency,V>, JDKCodeModel)` — exact signature match wins, else qualifier-exact + `TypeUsages.isCompatible(...)` wildcard fallback (#166; throws `InjectionException` on ambiguity). `IndependentDependency` is the primary key type. |
+| `Dependency` / `AbstractDependency` / `IndependentDependency` / `InjectionPointDependency` | Interface `typeUsage()` + `signature()`. `signatureOf(typeUsage, qualifierAnnotations)` is canonical + order-stable and throws `DuplicateQualifierException` on a duplicate qualifier type (#162). `resolve(requested, Map<Dependency,V>, JDKCodeModel)` — exact signature match wins, else qualifier-exact + `TypeUsages.isAssignable(candidate, requested, ...)` wildcard fallback (#166; throws `InjectionException` on ambiguity). `IndependentDependency` is the primary key type. |
 | `InjectionPoint` (+ `Field`/`Method`/`Constructor` impls) | `typeDescriptor()`, `dependencies()`, `inject(target, actualParameters[])`. Impls obtain `Field`/`Method`/`Constructor` from the `FieldType`/`MethodType`/`ConstructorType` trait, `trySetAccessible()`, invoke; throw `InjectionFailedException`. Method points carry an `overrideKey()` so subclass overrides replace superclass points. |
 | `Binding<T>` hierarchy | `AbstractBinding` (stores `Dependency`) → `ValueBinding` (`value()`) → `SingletonValueBinding` (fixed instance) / `SupplierBinding` (`Supplier`-backed); `ClassBinding` (`concreteClass()`) → `LazySingletonClassBinding` (one `Lazy<T>` per context) / `NonSingletonClassBinding` (prototype) / `CustomScopedClassBinding` (delegates to a `Scope`-produced binding; identity-tracks instances for `@PreDestroy`). |
 | `Resolver<T>` / `ChainedResolver` | `@FunctionalInterface Optional<? extends Binding<T>> resolve(Dependency)`; `ChainedResolver` is a `CopyOnWriteArrayList` consulted in order. |
@@ -1071,7 +1073,7 @@ Non-obvious behaviours that are working as designed but will surprise you.
 - Directive helpers on `JDKModuleDescriptor` are idempotent and **return the existing clause** on a duplicate — they do not merge modifiers into an already-present clause.
 - `annotationClauses()` is source-parsed-only; `RequiresVersionTrait` / `ModuleModifier.SYNTHETIC`/`MANDATED` are bytecode-only.
 - `rescan()` evicts by `SourceLocation.FilePosition` URI match only — it does **not** fix up stale `TypeUsage` references embedded in other, non-evicted descriptors, and it silently degrades classpath-resolved types to `UnknownTypeUsage` if you don't re-supply classpath/modulePath/compilerOptions on every call.
-- `TypeUsages.isAssignable` silently treats an unloadable type as not-assignable — a purely source-modelled type with no runtime `Class` will never be reported compatible by `isCompatible`.
+- `TypeUsages.isAssignable` (via private `isErasedSubtype`) silently treats an unloadable type as not-a-subtype — a purely source-modelled type with no runtime `Class` will never be reported a subtype.
 - Descriptor member ordering is **source-order preserved** in the populator (`processMembers()` sorts by source start position); the reflection path shares one `DeclarationOrder` counter across constructors+methods+fields, so order values interleave kinds.
 - `JdkExpressionConverter` is **not thread-safe** — `setTypeContext`/`setEnclosingType`/`currentPath` are mutated throughout a single sequential run; deferred body tasks must re-set the type context for their class.
 
@@ -1132,7 +1134,7 @@ Non-obvious behaviours that are working as designed but will surprise you.
 
 **To get a human-readable type name for display or codegen:** `typeUsage.canonicalName()` — module-free, dot-separated. Use `typeUsage.binaryName()` / `TypeName` equality for `CodeModel` lookups.
 
-**To check JLS assignability including wildcards/generics:** `TypeUsages.isCompatible(requested, candidate, jdkCodeModel)` (or `isAssignable` for plain covariance).
+**To check JLS subtyping including wildcards/generics:** `TypeUsages.isAssignable(subtype, supertype, jdkCodeModel)` — generic-aware (covariant top level, JLS 4.5.1 argument containment underneath).
 
 **To re-analyze a single file after an edit without rebuilding the whole `CodeModel`:** `JdkInitializer.rescan(jdkCodeModel, updatedFiles, contextFiles, classpath, modulePath, compilerOptions, diagnosticListener)`. Re-supply classpath/modulePath/compilerOptions every call. Batch all genuinely-changed files into one call. Embedded `TypeUsage` refs in other descriptors are not fixed up.
 

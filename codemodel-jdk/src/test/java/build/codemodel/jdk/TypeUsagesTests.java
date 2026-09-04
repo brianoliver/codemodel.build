@@ -13,7 +13,12 @@ import build.codemodel.foundation.usage.TypeUsage;
 import build.codemodel.foundation.usage.WildcardTypeUsage;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -102,22 +107,23 @@ class TypeUsagesTests {
     }
 
     /**
+     * A generic interface whose superinterface argument nests a wildcard bounded by its own type variable
+     * ({@code Supplier<List<? extends T>>} - a wildcard can't sit directly in an {@code extends} clause, but
+     * can nest one level in). Substituting a concrete argument for {@code T} has to descend into that
+     * wildcard bound: {@code NestedWildcardSupplier<Impl>} supplies {@code List<? extends Impl>}, not
+     * {@code List<? extends T>}.
+     */
+    interface NestedWildcardSupplier<T>
+        extends Supplier<List<? extends T>> {
+    }
+
+    /**
      * A non-generic subtype whose generic superclass is already fully instantiated ({@code ArrayList<Base>}) -
      * the "{@code class IntList extends ArrayList<Integer>}" shape. It declares no type variables of its own,
      * so the substitution map is empty and the concrete {@code Base} argument flows straight up.
      */
     static class BaseArrayList
-        extends java.util.ArrayList<Base> {
-    }
-
-    /**
-     * A generic interface whose supertype clause nests a wildcard bound built from the interface's own type
-     * variable ({@code Bag<T> extends Supplier<List<? extends T>>}). Walking from a {@code Bag<Impl>} usage up
-     * to {@code Supplier} must substitute {@code T = Impl} <em>into the wildcard bound</em>, yielding
-     * {@code Supplier<List<? extends Impl>>}.
-     */
-    interface Bag<T>
-        extends java.util.function.Supplier<java.util.List<? extends T>> {
+        extends ArrayList<Base> {
     }
 
     /**
@@ -135,7 +141,7 @@ class TypeUsagesTests {
                 Optional.of(Lazy.of(codeModel.getTypeUsage(Base.class)))));
         final var candidate = GenericTypeUsage.of(codeModel, classTypeName);
 
-        assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, requested, codeModel))
             .isTrue();
     }
 
@@ -159,9 +165,9 @@ class TypeUsagesTests {
         final var unrelatedCandidate = GenericTypeUsage.of(codeModel, classTypeName,
             codeModel.getTypeUsage(Unrelated.class));
 
-        assertThat(TypeUsages.isCompatible(requested, assignableCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(assignableCandidate, requested, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(requested, unrelatedCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(unrelatedCandidate, requested, codeModel))
             .isFalse();
     }
 
@@ -183,7 +189,7 @@ class TypeUsagesTests {
             WildcardTypeUsage.of(codeModel, Optional.empty(),
                 Optional.of(Lazy.of(codeModel.getTypeUsage(Impl.class)))));
 
-        assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, requested, codeModel))
             .isTrue();
     }
 
@@ -202,7 +208,7 @@ class TypeUsagesTests {
         final var candidate = GenericTypeUsage.of(codeModel, classTypeName,
             codeModel.getTypeUsage(Unrelated.class));
 
-        assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, requested, codeModel))
             .isTrue();
     }
 
@@ -226,9 +232,9 @@ class TypeUsagesTests {
         final var unrelatedCandidate = GenericTypeUsage.of(codeModel, classTypeName,
             codeModel.getTypeUsage(Unrelated.class));
 
-        assertThat(TypeUsages.isCompatible(requested, supertypeCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(supertypeCandidate, requested, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(requested, unrelatedCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(unrelatedCandidate, requested, codeModel))
             .isFalse();
     }
 
@@ -260,9 +266,9 @@ class TypeUsagesTests {
             WildcardTypeUsage.of(codeModel, Optional.empty(),
                 Optional.of(Lazy.of(codeModel.getTypeUsage(Base.class)))));
 
-        assertThat(TypeUsages.isCompatible(extendsBaseRequested, superImplCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(superImplCandidate, extendsBaseRequested, codeModel))
             .isFalse();
-        assertThat(TypeUsages.isCompatible(superImplRequested, extendsBaseCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(extendsBaseCandidate, superImplRequested, codeModel))
             .isFalse();
     }
 
@@ -293,11 +299,11 @@ class TypeUsagesTests {
         final var unboundedCandidate = GenericTypeUsage.of(codeModel, classTypeName,
             WildcardTypeUsage.create(codeModel));
 
-        assertThat(TypeUsages.isCompatible(requested, reachableCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(reachableCandidate, requested, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(requested, unreachableCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(unreachableCandidate, requested, codeModel))
             .isFalse();
-        assertThat(TypeUsages.isCompatible(requested, unboundedCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(unboundedCandidate, requested, codeModel))
             .isFalse();
     }
 
@@ -320,7 +326,7 @@ class TypeUsagesTests {
             WildcardTypeUsage.of(codeModel, Optional.empty(),
                 Optional.of(Lazy.of(codeModel.getTypeUsage(Impl2.class)))));
 
-        assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, requested, codeModel))
             .isFalse();
     }
 
@@ -336,8 +342,8 @@ class TypeUsagesTests {
         final var codeModel = createCodeModel();
         final var nameProvider = codeModel.getNameProvider();
         final var classTypeName = nameProvider.getTypeName(Class.class);
-        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
-        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+        final var listTypeName = nameProvider.getTypeName(List.class);
+        final var arrayListTypeName = nameProvider.getTypeName(ArrayList.class);
 
         final var requested = GenericTypeUsage.of(codeModel, classTypeName,
             WildcardTypeUsage.of(codeModel, Optional.empty(),
@@ -357,11 +363,11 @@ class TypeUsagesTests {
                 Optional.of(Lazy.of(GenericTypeUsage.of(codeModel, listTypeName,
                     codeModel.getTypeUsage(Impl.class))))));
 
-        assertThat(TypeUsages.isCompatible(requested, matchingBound, codeModel))
+        assertThat(TypeUsages.isAssignable(matchingBound, requested, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(requested, subtypeBound, codeModel))
+        assertThat(TypeUsages.isAssignable(subtypeBound, requested, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(requested, mismatchedArgumentBound, codeModel))
+        assertThat(TypeUsages.isAssignable(mismatchedArgumentBound, requested, codeModel))
             .isFalse();
     }
 
@@ -375,7 +381,7 @@ class TypeUsagesTests {
         final var codeModel = createCodeModel();
         final var nameProvider = codeModel.getNameProvider();
         final var classTypeName = nameProvider.getTypeName(Class.class);
-        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
+        final var listTypeName = nameProvider.getTypeName(List.class);
 
         final var requested = GenericTypeUsage.of(codeModel, classTypeName,
             WildcardTypeUsage.of(codeModel,
@@ -394,9 +400,43 @@ class TypeUsagesTests {
                     codeModel.getTypeUsage(Impl.class)))),
                 Optional.empty()));
 
-        assertThat(TypeUsages.isCompatible(requested, matchingBound, codeModel))
+        assertThat(TypeUsages.isAssignable(matchingBound, requested, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(requested, mismatchedArgumentBound, codeModel))
+        assertThat(TypeUsages.isAssignable(mismatchedArgumentBound, requested, codeModel))
+            .isFalse();
+    }
+
+    /**
+     * A wildcard nested <em>inside</em> a non-wildcard type argument is still governed by that argument's
+     * invariance per <a href="https://docs.oracle.com/javase/specs/jls/se25/html/jls-4.html#jls-4.5.1">JLS
+     * 4.5.1</a>: {@code List<? extends Impl>} and {@code List<? extends Base>} are distinct types, so
+     * {@code Class<List<? extends Impl>>} is not a subtype of {@code Class<List<? extends Base>>} even though
+     * {@code Impl} is a subtype of {@code Base}. The equal-instantiation case ({@code Class<List<? extends
+     * Base>>} against itself) still holds.
+     */
+    @Test
+    void shouldCompareWildcardsNestedInAnInvariantArgumentInvariantly() {
+        final var codeModel = createCodeModel();
+        final var nameProvider = codeModel.getNameProvider();
+        final var classTypeName = nameProvider.getTypeName(Class.class);
+        final var listTypeName = nameProvider.getTypeName(List.class);
+
+        final var supertype = GenericTypeUsage.of(codeModel, classTypeName,
+            GenericTypeUsage.of(codeModel, listTypeName,
+                WildcardTypeUsage.of(codeModel, Optional.empty(),
+                    Optional.of(Lazy.of(codeModel.getTypeUsage(Base.class))))));
+        final var equalInstantiation = GenericTypeUsage.of(codeModel, classTypeName,
+            GenericTypeUsage.of(codeModel, listTypeName,
+                WildcardTypeUsage.of(codeModel, Optional.empty(),
+                    Optional.of(Lazy.of(codeModel.getTypeUsage(Base.class))))));
+        final var subtypeBoundInstantiation = GenericTypeUsage.of(codeModel, classTypeName,
+            GenericTypeUsage.of(codeModel, listTypeName,
+                WildcardTypeUsage.of(codeModel, Optional.empty(),
+                    Optional.of(Lazy.of(codeModel.getTypeUsage(Impl.class))))));
+
+        assertThat(TypeUsages.isAssignable(equalInstantiation, supertype, codeModel))
+            .isTrue();
+        assertThat(TypeUsages.isAssignable(subtypeBoundInstantiation, supertype, codeModel))
             .isFalse();
     }
 
@@ -412,7 +452,7 @@ class TypeUsagesTests {
         final var requested = codeModel.getTypeUsage(Base.class);
         final var candidate = WildcardTypeUsage.create(codeModel);
 
-        assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, requested, codeModel))
             .isFalse();
     }
 
@@ -443,11 +483,11 @@ class TypeUsagesTests {
 
         final var requested = codeModel.getTypeUsage(Base.class);
 
-        assertThat(TypeUsages.isCompatible(requested, codeModel.getTypeUsage(Base.class), codeModel))
+        assertThat(TypeUsages.isAssignable(codeModel.getTypeUsage(Base.class), requested, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(requested, codeModel.getTypeUsage(Impl.class), codeModel))
+        assertThat(TypeUsages.isAssignable(codeModel.getTypeUsage(Impl.class), requested, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(requested, codeModel.getTypeUsage(Unrelated.class), codeModel))
+        assertThat(TypeUsages.isAssignable(codeModel.getTypeUsage(Unrelated.class), requested, codeModel))
             .isFalse();
     }
 
@@ -467,7 +507,7 @@ class TypeUsagesTests {
         final var requested = GenericTypeUsage.of(codeModel, classTypeName, codeModel.getTypeUsage(Base.class));
         final var candidate = GenericTypeUsage.of(codeModel, classTypeName, codeModel.getTypeUsage(Impl.class));
 
-        assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, requested, codeModel))
             .isFalse();
     }
 
@@ -489,9 +529,9 @@ class TypeUsagesTests {
             codeModel.getTypeUsage(Base.class));
         final var notNamedCandidate = ArrayTypeUsage.of(codeModel, Lazy.of(codeModel.getTypeUsage(Base.class)));
 
-        assertThat(TypeUsages.isCompatible(requested, differentRawTypeCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(differentRawTypeCandidate, requested, codeModel))
             .isFalse();
-        assertThat(TypeUsages.isCompatible(requested, notNamedCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(notNamedCandidate, requested, codeModel))
             .isFalse();
     }
 
@@ -508,13 +548,13 @@ class TypeUsagesTests {
     void shouldBeIncompatibleWhenDifferentRawTypeCandidateHasItsOwnTypeArgument() {
         final var codeModel = createCodeModel();
         final var nameProvider = codeModel.getNameProvider();
-        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
-        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+        final var listTypeName = nameProvider.getTypeName(List.class);
+        final var arrayListTypeName = nameProvider.getTypeName(ArrayList.class);
 
         final var requested = GenericTypeUsage.of(codeModel, listTypeName, codeModel.getTypeUsage(Base.class));
         final var candidate = GenericTypeUsage.of(codeModel, arrayListTypeName, codeModel.getTypeUsage(Impl.class));
 
-        assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, requested, codeModel))
             .isFalse();
     }
 
@@ -530,14 +570,51 @@ class TypeUsagesTests {
     void shouldVerifyInvarianceAcrossARawTypeChange() {
         final var codeModel = createCodeModel();
         final var nameProvider = codeModel.getNameProvider();
-        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
-        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+        final var listTypeName = nameProvider.getTypeName(List.class);
+        final var arrayListTypeName = nameProvider.getTypeName(ArrayList.class);
 
         final var requested = GenericTypeUsage.of(codeModel, listTypeName, codeModel.getTypeUsage(Base.class));
         final var candidate = GenericTypeUsage.of(codeModel, arrayListTypeName, codeModel.getTypeUsage(Base.class));
 
-        assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, requested, codeModel))
             .isTrue();
+    }
+
+    /**
+     * Supertype substitution descends into a wildcard bound nested inside a superinterface argument:
+     * {@code NestedWildcardSupplier<T> extends Supplier<List<? extends T>>}, so
+     * {@code NestedWildcardSupplier<Impl>} implements {@code Supplier<List<? extends Impl>>}. The outer
+     * {@code Supplier} argument is invariant, so that instantiation is a subtype of
+     * {@code Supplier<? extends List<? extends Base>>} (covariant outer wildcard, and {@code Impl <: Base})
+     * but not of {@code Supplier<? extends List<? extends Unrelated>>}. Regression test for {@code substitute}
+     * checking {@code TypeVariableUsage} before its {@code WildcardTypeUsage} subtype, which left the bound as
+     * {@code ? extends T} and made even the matching check fail.
+     */
+    @Test
+    void shouldSubstituteIntoAWildcardBoundNestedInASupertypeArgument() {
+        final var codeModel = createCodeModel();
+        final var nameProvider = codeModel.getNameProvider();
+        final var supplierTypeName = nameProvider.getTypeName(Supplier.class);
+        final var listTypeName = nameProvider.getTypeName(List.class);
+
+        final var candidate = GenericTypeUsage.of(codeModel,
+            nameProvider.getTypeName(NestedWildcardSupplier.class), codeModel.getTypeUsage(Impl.class));
+
+        final var matching = GenericTypeUsage.of(codeModel, supplierTypeName,
+            WildcardTypeUsage.of(codeModel, Optional.empty(),
+                Optional.of(Lazy.of(GenericTypeUsage.of(codeModel, listTypeName,
+                    WildcardTypeUsage.of(codeModel, Optional.empty(),
+                        Optional.of(Lazy.of(codeModel.getTypeUsage(Base.class)))))))));
+        final var mismatched = GenericTypeUsage.of(codeModel, supplierTypeName,
+            WildcardTypeUsage.of(codeModel, Optional.empty(),
+                Optional.of(Lazy.of(GenericTypeUsage.of(codeModel, listTypeName,
+                    WildcardTypeUsage.of(codeModel, Optional.empty(),
+                        Optional.of(Lazy.of(codeModel.getTypeUsage(Unrelated.class)))))))));
+
+        assertThat(TypeUsages.isAssignable(candidate, matching, codeModel))
+            .isTrue();
+        assertThat(TypeUsages.isAssignable(candidate, mismatched, codeModel))
+            .isFalse();
     }
 
     /**
@@ -550,17 +627,17 @@ class TypeUsagesTests {
     void shouldSubstituteThroughMultipleGenericSupertypes() {
         final var codeModel = createCodeModel();
         final var nameProvider = codeModel.getNameProvider();
-        final var collectionTypeName = nameProvider.getTypeName(java.util.Collection.class);
-        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+        final var collectionTypeName = nameProvider.getTypeName(Collection.class);
+        final var arrayListTypeName = nameProvider.getTypeName(ArrayList.class);
 
         final var candidate = GenericTypeUsage.of(codeModel, arrayListTypeName, codeModel.getTypeUsage(Base.class));
 
         final var matching = GenericTypeUsage.of(codeModel, collectionTypeName, codeModel.getTypeUsage(Base.class));
         final var mismatched = GenericTypeUsage.of(codeModel, collectionTypeName, codeModel.getTypeUsage(Impl.class));
 
-        assertThat(TypeUsages.isCompatible(matching, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, matching, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(mismatched, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, mismatched, codeModel))
             .isFalse();
     }
 
@@ -574,16 +651,16 @@ class TypeUsagesTests {
     void shouldSubstituteThroughAnAlreadyInstantiatedGenericSuperclass() {
         final var codeModel = createCodeModel();
         final var nameProvider = codeModel.getNameProvider();
-        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
+        final var listTypeName = nameProvider.getTypeName(List.class);
 
         final var candidate = codeModel.getTypeUsage(BaseArrayList.class);
 
         final var matching = GenericTypeUsage.of(codeModel, listTypeName, codeModel.getTypeUsage(Base.class));
         final var mismatched = GenericTypeUsage.of(codeModel, listTypeName, codeModel.getTypeUsage(Impl.class));
 
-        assertThat(TypeUsages.isCompatible(matching, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, matching, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(mismatched, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, mismatched, codeModel))
             .isFalse();
     }
 
@@ -597,16 +674,16 @@ class TypeUsagesTests {
         final var codeModel = createCodeModel();
         final var nameProvider = codeModel.getNameProvider();
         final var iterableTypeName = nameProvider.getTypeName(Iterable.class);
-        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+        final var arrayListTypeName = nameProvider.getTypeName(ArrayList.class);
 
         final var candidate = GenericTypeUsage.of(codeModel, arrayListTypeName, codeModel.getTypeUsage(Base.class));
 
         final var matching = GenericTypeUsage.of(codeModel, iterableTypeName, codeModel.getTypeUsage(Base.class));
         final var mismatched = GenericTypeUsage.of(codeModel, iterableTypeName, codeModel.getTypeUsage(Impl.class));
 
-        assertThat(TypeUsages.isCompatible(matching, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, matching, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(mismatched, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, mismatched, codeModel))
             .isFalse();
     }
 
@@ -620,8 +697,8 @@ class TypeUsagesTests {
     void shouldApplyWildcardArgumentRulesToTheSubstitutedInstantiation() {
         final var codeModel = createCodeModel();
         final var nameProvider = codeModel.getNameProvider();
-        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
-        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+        final var listTypeName = nameProvider.getTypeName(List.class);
+        final var arrayListTypeName = nameProvider.getTypeName(ArrayList.class);
 
         final var candidate = GenericTypeUsage.of(codeModel, arrayListTypeName, codeModel.getTypeUsage(Impl.class));
 
@@ -632,9 +709,9 @@ class TypeUsagesTests {
             WildcardTypeUsage.of(codeModel, Optional.empty(),
                 Optional.of(Lazy.of(codeModel.getTypeUsage(Impl2.class)))));
 
-        assertThat(TypeUsages.isCompatible(extendsBase, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, extendsBase, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(extendsImpl2, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, extendsImpl2, codeModel))
             .isFalse();
     }
 
@@ -649,8 +726,8 @@ class TypeUsagesTests {
     void shouldApplySuperAndUnboundedWildcardContainmentToTheSubstitutedInstantiation() {
         final var codeModel = createCodeModel();
         final var nameProvider = codeModel.getNameProvider();
-        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
-        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+        final var listTypeName = nameProvider.getTypeName(List.class);
+        final var arrayListTypeName = nameProvider.getTypeName(ArrayList.class);
 
         final var baseCandidate = GenericTypeUsage.of(codeModel, arrayListTypeName,
             codeModel.getTypeUsage(Base.class));
@@ -664,11 +741,11 @@ class TypeUsagesTests {
             WildcardTypeUsage.of(codeModel, Optional.of(Lazy.of(codeModel.getTypeUsage(Unrelated.class))),
                 Optional.empty()));
 
-        assertThat(TypeUsages.isCompatible(superImpl, baseCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(baseCandidate, superImpl, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(unbounded, baseCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(baseCandidate, unbounded, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(superUnrelated, baseCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(baseCandidate, superUnrelated, codeModel))
             .isFalse();
     }
 
@@ -681,47 +758,13 @@ class TypeUsagesTests {
     void shouldBeIncompatibleWhenCandidateHierarchyNeverReachesRequestedRawType() {
         final var codeModel = createCodeModel();
         final var nameProvider = codeModel.getNameProvider();
-        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
-        final var hashSetTypeName = nameProvider.getTypeName(java.util.HashSet.class);
+        final var listTypeName = nameProvider.getTypeName(List.class);
+        final var hashSetTypeName = nameProvider.getTypeName(HashSet.class);
 
         final var requested = GenericTypeUsage.of(codeModel, listTypeName, codeModel.getTypeUsage(Base.class));
         final var candidate = GenericTypeUsage.of(codeModel, hashSetTypeName, codeModel.getTypeUsage(Base.class));
 
-        assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
-            .isFalse();
-    }
-
-    /**
-     * Supertype-argument substitution reaches <em>inside</em> a wildcard bound, not just top-level type
-     * arguments. {@code Bag<T>} extends {@code Supplier<List<? extends T>>}, so a {@code Bag<Impl>} usage
-     * implements {@code Supplier<List<? extends Impl>>} - the walk must push {@code T = Impl} through the
-     * {@code ? extends T} bound. That instantiation satisfies a requested {@code Supplier<List<? extends Base>>}
-     * (since {@code Impl <: Base}) but not {@code Supplier<List<? extends Impl2>>}. Regression test: with the
-     * wildcard case ordered after the type-variable case in {@code substitute}, the bound came back as
-     * {@code ? extends T} unsubstituted and both checks wrongly failed.
-     */
-    @Test
-    void shouldSubstituteIntoAWildcardBoundNestedInASupertypeArgument() {
-        final var codeModel = createCodeModel();
-        final var nameProvider = codeModel.getNameProvider();
-        final var supplierTypeName = nameProvider.getTypeName(java.util.function.Supplier.class);
-        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
-        final var bagTypeName = nameProvider.getTypeName(Bag.class);
-
-        final var candidate = GenericTypeUsage.of(codeModel, bagTypeName, codeModel.getTypeUsage(Impl.class));
-
-        final var matching = GenericTypeUsage.of(codeModel, supplierTypeName,
-            GenericTypeUsage.of(codeModel, listTypeName,
-                WildcardTypeUsage.of(codeModel, Optional.empty(),
-                    Optional.of(Lazy.of(codeModel.getTypeUsage(Base.class))))));
-        final var mismatched = GenericTypeUsage.of(codeModel, supplierTypeName,
-            GenericTypeUsage.of(codeModel, listTypeName,
-                WildcardTypeUsage.of(codeModel, Optional.empty(),
-                    Optional.of(Lazy.of(codeModel.getTypeUsage(Impl2.class))))));
-
-        assertThat(TypeUsages.isCompatible(matching, candidate, codeModel))
-            .isTrue();
-        assertThat(TypeUsages.isCompatible(mismatched, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, requested, codeModel))
             .isFalse();
     }
 
@@ -734,13 +777,13 @@ class TypeUsagesTests {
     void shouldFallBackToErasureAssignabilityWhenDifferentRawTypeCandidateIsRaw() {
         final var codeModel = createCodeModel();
         final var nameProvider = codeModel.getNameProvider();
-        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
-        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+        final var listTypeName = nameProvider.getTypeName(List.class);
+        final var arrayListTypeName = nameProvider.getTypeName(ArrayList.class);
 
         final var requested = GenericTypeUsage.of(codeModel, listTypeName, codeModel.getTypeUsage(Base.class));
         final var candidate = GenericTypeUsage.of(codeModel, arrayListTypeName);
 
-        assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
+        assertThat(TypeUsages.isAssignable(candidate, requested, codeModel))
             .isTrue();
     }
 
@@ -769,11 +812,11 @@ class TypeUsagesTests {
         final var secondParameterMismatchCandidate = GenericTypeUsage.of(codeModel, classTypeName,
             codeModel.getTypeUsage(Impl.class), codeModel.getTypeUsage(Impl2.class));
 
-        assertThat(TypeUsages.isCompatible(requested, mismatchedArityCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(mismatchedArityCandidate, requested, codeModel))
             .isFalse();
-        assertThat(TypeUsages.isCompatible(requested, allMatchingCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(allMatchingCandidate, requested, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(requested, secondParameterMismatchCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(secondParameterMismatchCandidate, requested, codeModel))
             .isFalse();
     }
 
@@ -804,18 +847,18 @@ class TypeUsagesTests {
             WildcardTypeUsage.of(codeModel, Optional.of(Lazy.of(codeModel.getTypeUsage(Impl.class))),
                 Optional.empty()));
 
-        assertThat(TypeUsages.isCompatible(extendsBaseRequested, unboundedCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(unboundedCandidate, extendsBaseRequested, codeModel))
             .isFalse();
-        assertThat(TypeUsages.isCompatible(extendsBaseRequested, superOnlyCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(superOnlyCandidate, extendsBaseRequested, codeModel))
             .isFalse();
-        assertThat(TypeUsages.isCompatible(unboundedRequested, unboundedCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(unboundedCandidate, unboundedRequested, codeModel))
             .isTrue();
-        assertThat(TypeUsages.isCompatible(unboundedRequested, superOnlyCandidate, codeModel))
+        assertThat(TypeUsages.isAssignable(superOnlyCandidate, unboundedRequested, codeModel))
             .isTrue();
     }
 
     /**
-     * Identical {@link build.codemodel.foundation.naming.TypeName}s short-circuit to {@code true} without
+     * Identical {@link TypeName}s short-circuit to {@code true} without
      * consulting the {@link JDKCodeModel} at all.
      */
     @Test

@@ -12,7 +12,7 @@
 - `codemodel-hierarchical` — type hierarchy (parents, ancestors, descendants, assignability, diamond detection)
 - `codemodel-imperative` — paradigm-neutral statement AST nodes (Block, If, While, Return, Assignment)
 - `codemodel-objectoriented` — OOP traits (classes/interfaces, fields, methods, constructors, modifiers); `MethodDescriptor.signature()` vs `overrideKey()`; `DeclarationOrder`
-- `codemodel-jdk` — **reflection-based** `JDKCodeModel` + shared descriptor/expression/statement trait vocabulary + `referencesTo()` API + `JDKModuleDescriptor` (JPMS: text scanner + ClassFile-API extraction) + `TypeUsages.isCompatible` (JLS wildcard/generic assignability)
+- `codemodel-jdk` — **reflection-based** `JDKCodeModel` + shared descriptor/expression/statement trait vocabulary + `referencesTo()` API + `JDKModuleDescriptor` (JPMS: text scanner + ClassFile-API extraction) + `TypeUsages.isAssignable` (JLS wildcard/generic subtyping)
 - `codemodel-jdk-populator` — **javac source-parsing pipeline** (extracted from `codemodel-jdk`): `JdkInitializer`, shared `TypeMirrorResolver` (also used by the annotation processor), expression/statement converters, incremental `rescan()`, `SourceLocation` at `build.codemodel.jdk.populator.descriptor`
 - `codemodel-dependency-injection` — custom JSR-330 DI built on `JDKCodeModel` introspection; `TypeLiteral`, wildcard-bearing + qualified `@Provides` resolution
 - `codemodel-framework` — pipeline interfaces (Initializer, Enricher, TypeChecker, Compiler, Completer)

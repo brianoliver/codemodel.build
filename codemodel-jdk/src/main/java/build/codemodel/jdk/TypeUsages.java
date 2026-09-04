@@ -261,229 +261,188 @@ public final class TypeUsages {
     }
 
     /**
-     * Determines if {@code candidate} is compatible with the (possibly wildcard-bearing) {@code requested}
-     * {@link TypeUsage} - i.e. whether {@code candidate} could stand in wherever {@code requested} is
-     * expected, per ordinary JLS assignability (covariant: a subtype is always compatible with its
-     * supertype).
+     * Determines if {@code subtype} is a subtype of {@code supertype} per
+     * <a href="https://docs.oracle.com/javase/specs/jls/se25/html/jls-4.html#jls-4.10">JLS 4.10</a>
+     * subtyping - i.e. whether a value of {@code subtype} could stand in wherever {@code supertype} is
+     * expected. Fully generic-aware: covariant through the class / interface hierarchy at the top level, but
+     * a parameterized {@code supertype}'s own type arguments are matched by
+     * <a href="https://docs.oracle.com/javase/specs/jls/se25/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a>
+     * containment - invariant unless the argument is a wildcard - rather than by assignability, so
+     * {@code List<Impl>} is <em>not</em> a subtype of {@code List<Base>} even though {@code Impl} is a
+     * subtype of {@code Base}.
      *
-     * <p>This is distinct from the <i>invariant</i> rules governing {@code requested}'s own generic type
-     * arguments, if it has any - per <a href="https://docs.oracle.com/javase/specs/jls/se25/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a>,
-     * a concrete type argument (no wildcard) must match exactly, since {@code List<Impl>} is never
-     * compatible with a requested {@code List<Base>} even though {@code Impl} is compatible with
-     * {@code Base} at the top level. Each type argument is compared via
-     * {@link #isArgumentCompatible(TypeUsage, TypeUsage, JDKCodeModel)}, which enforces that invariance
-     * (relaxed only where {@code requested}'s argument is itself a wildcard, or {@code candidate} supplies
-     * no type arguments at all - a raw usage, compatible with any parameterization of the same raw type).
+     * <p>Where the erased hierarchy links {@code subtype} to {@code supertype} through a <em>different</em>
+     * raw type (e.g. {@code ArrayList<Base>} against a {@code List<Base>} supertype, or
+     * {@code class IntList extends ArrayList<Integer>} against {@code List<Integer>}), {@code subtype}'s
+     * reified type arguments are substituted through the intervening generic supertypes (JLS 4.10.2) to
+     * arrive at the instantiation of {@code supertype}'s raw type that {@code subtype} actually implements,
+     * which is then compared positionally. Where that substitution can't be performed precisely - an
+     * unresolvable descriptor, a type-variable arity mismatch, or a raw link in the chain - a raw
+     * {@code subtype} falls back to erasure subtyping and a concretely-parameterized one is treated as not a
+     * subtype rather than risk a false positive.
      *
-     * @param requested the (possibly wildcard-bearing) requested {@link TypeUsage}
-     * @param candidate the candidate {@link TypeUsage}
-     * @param codeModel the {@link JDKCodeModel} used to check bound assignability, scanning either side of the
-     *                  comparison on demand if not already present
-     * @return {@code true} if {@code candidate} is compatible with {@code requested}, {@code false} otherwise
-     * @see #isAssignable(TypeUsage, TypeUsage, JDKCodeModel)
+     * <p>A top-level {@link WildcardTypeUsage} {@code supertype} is treated as a type-argument-position
+     * construct and dispatched to the same JLS 4.5.1 containment check used for a parameterized
+     * {@code supertype}'s arguments.
+     *
+     * @param subtype   the candidate subtype {@link TypeUsage}
+     * @param supertype the (possibly wildcard-bearing or parameterized) supertype {@link TypeUsage}
+     * @param codeModel the {@link JDKCodeModel} used to resolve each participating type's descriptor on
+     *                  demand, so callers never need to have pre-scanned them
+     * @return {@code true} if {@code subtype} is a subtype of {@code supertype}, {@code false} otherwise
      */
-    public static boolean isCompatible(final TypeUsage requested,
-                                       final TypeUsage candidate,
+    public static boolean isAssignable(final TypeUsage subtype,
+                                       final TypeUsage supertype,
                                        final JDKCodeModel codeModel) {
 
-        if (requested instanceof WildcardTypeUsage wildcard) {
-            return wildcardCompatible(wildcard, candidate, codeModel);
+        if (supertype instanceof WildcardTypeUsage supertypeWildcard) {
+            return contains(supertypeWildcard, subtype, codeModel);
         }
 
-        if (candidate instanceof WildcardTypeUsage) {
-            // a wildcard can only appear on the candidate side when requested is itself a wildcard
-            // (handled above) - a wildcard can never satisfy a requested concrete or generic type
+        if (subtype instanceof WildcardTypeUsage) {
+            // a wildcard can only stand on the subtype side when the supertype is itself a wildcard
+            // (handled above) - it can never be a subtype of a concrete or parameterized type
             return false;
         }
 
-        if (!(requested instanceof GenericTypeUsage requestedGeneric)) {
-            // requested carries no type argument for invariance to apply to - ordinary (covariant)
-            // JLS assignability governs the whole type
-            return isAssignable(candidate, requested, codeModel);
+        if (!(supertype instanceof GenericTypeUsage supertypeGeneric)
+            || supertypeGeneric.parameters().findAny().isEmpty()) {
+            // supertype carries no type arguments for invariance to apply to - erased subtyping governs
+            return isErasedSubtype(subtype, supertype, codeModel);
         }
 
-        if (!(candidate instanceof NamedTypeUsage candidateNamed)) {
+        if (!(subtype instanceof NamedTypeUsage subtypeNamed)) {
             return false;
         }
 
-        if (!requestedGeneric.typeName().equals(candidateNamed.typeName())) {
-            // candidate isn't a usage of the same generic declaration as requested, so there's no
-            // positional type argument list to compare directly against requested's. Substitute
-            // candidate's reified type arguments (and any concrete instantiations its own supertypes are
-            // written with, e.g. class IntList extends ArrayList<Integer>) through the intervening
-            // generic supertypes to arrive at the instantiation of requested's raw type that candidate
-            // actually implements (e.g. ArrayList<Base> -> List<Base>), then compare that positionally
-            // against requested.
-            final var instantiated = instantiatedSupertype(
-                requestedGeneric.typeName(), candidateNamed, codeModel, new HashSet<>());
-            if (instantiated.isPresent()) {
-                return parametersCompatible(requestedGeneric, instantiated.get(), codeModel);
-            }
-
-            // the walk was inconclusive - no concrete instantiation of requested's raw type reachable
-            // from candidate. If candidate carries no reified type argument of its own it's a raw usage,
-            // compatible with any parameterization, so ordinary raw (erasure) assignability governs;
-            // otherwise a raw/erased link somewhere in the chain leaves invariance unverifiable, so
-            // conservatively treat it as incompatible rather than ignore the argument mismatch entirely.
-            return (!(candidate instanceof GenericTypeUsage candidateGenericRawCheck)
-                    || candidateGenericRawCheck.parameters().findAny().isEmpty())
-                && isAssignable(candidate, requested, codeModel);
+        final var instantiation = instantiatedSupertype(
+            supertypeGeneric.typeName(), subtypeNamed, codeModel, new HashSet<>());
+        if (instantiation.isPresent()) {
+            return argumentsContained(supertypeGeneric, instantiation.get(), codeModel);
         }
 
-        if (!(candidate instanceof GenericTypeUsage candidateGeneric)
-            || candidateGeneric.parameters().findAny().isEmpty()) {
-            // the candidate is a raw usage of the same raw type - compatible with any parameterization,
-            // since there is no reified type argument to conflict with the requested wildcard
-            return true;
-        }
-
-        return parametersCompatible(requestedGeneric, candidateGeneric, codeModel);
+        // no parameterized instantiation of supertype's raw type is reachable from subtype: a raw subtype
+        // is compatible with any parameterization (erased subtyping governs), a concretely-parameterized
+        // one leaves the invariance unverifiable and is conservatively rejected
+        final var subtypeIsRaw = !(subtype instanceof GenericTypeUsage subtypeGeneric)
+            || subtypeGeneric.parameters().findAny().isEmpty();
+        return subtypeIsRaw && isErasedSubtype(subtype, supertype, codeModel);
     }
 
     /**
-     * Determines if {@code requestedGeneric} and {@code candidateGeneric} - already established to share a
-     * common raw type - have the same number of type arguments, each pairwise compatible per
-     * {@link #isArgumentCompatible(TypeUsage, TypeUsage, JDKCodeModel)}.
+     * Determines if {@code supertype} and {@code subtypeInstantiation} - already established to share a raw
+     * type - have equal type-argument arity, with each of {@code supertype}'s arguments
+     * {@linkplain #contains(TypeUsage, TypeUsage, JDKCodeModel) containing} the positionally corresponding
+     * argument of {@code subtypeInstantiation} per JLS 4.5.1.
      */
-    private static boolean parametersCompatible(final GenericTypeUsage requestedGeneric,
-                                                final GenericTypeUsage candidateGeneric,
-                                                final JDKCodeModel codeModel) {
-
-        final var requestedParameters = requestedGeneric.parameters().toList();
-        final var candidateParameters = candidateGeneric.parameters().toList();
-
-        return requestedParameters.size() == candidateParameters.size()
-            && IntStream.range(0, requestedParameters.size())
-            .allMatch(i ->
-                isArgumentCompatible(requestedParameters.get(i), candidateParameters.get(i), codeModel));
-    }
-
-    /**
-     * Determines if {@code candidate} is compatible with {@code requested} in a generic type <i>argument</i>
-     * position, per the invariant containment rules of
-     * <a href="https://docs.oracle.com/javase/specs/jls/se25/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a> - unlike
-     * {@link #isCompatible(TypeUsage, TypeUsage, JDKCodeModel)}, a concrete (non-wildcard) {@code requested}
-     * argument requires an exact match rather than mere assignability, since generic type arguments are
-     * invariant without a wildcard.
-     *
-     * @param requested the requested type argument
-     * @param candidate the candidate type argument
-     * @param codeModel the {@link JDKCodeModel} used to check wildcard bound assignability
-     * @return {@code true} if {@code candidate} is compatible with {@code requested} in argument position
-     * @see #isCompatible(TypeUsage, TypeUsage, JDKCodeModel)
-     */
-    private static boolean isArgumentCompatible(final TypeUsage requested,
-                                                final TypeUsage candidate,
-                                                final JDKCodeModel codeModel) {
-
-        if (requested instanceof WildcardTypeUsage wildcard) {
-            return wildcardCompatible(wildcard, candidate, codeModel);
-        }
-
-        if (candidate instanceof WildcardTypeUsage) {
-            return false;
-        }
-
-        if (!(requested instanceof GenericTypeUsage requestedGeneric)) {
-            // a concrete type argument is invariant per JLS 4.5.1 - matching List<Person> against
-            // List<Car> must never collide, even where Person and Car are otherwise assignable
-            return requested.canonicalName().equals(candidate.canonicalName());
-        }
-
-        if (!(candidate instanceof NamedTypeUsage candidateNamed)
-            || !requestedGeneric.typeName().equals(candidateNamed.typeName())) {
-            return false;
-        }
-
-        if (!(candidate instanceof GenericTypeUsage candidateGeneric)
-            || candidateGeneric.parameters().findAny().isEmpty()) {
-            return true;
-        }
-
-        return parametersCompatible(requestedGeneric, candidateGeneric, codeModel);
-    }
-
-    /**
-     * Determines if {@code candidate} is compatible with a {@code requested} that is itself a
-     * {@link WildcardTypeUsage}, shared between {@link #isCompatible(TypeUsage, TypeUsage, JDKCodeModel)} and
-     * {@link #isArgumentCompatible(TypeUsage, TypeUsage, JDKCodeModel)} since a wildcard {@code requested} is
-     * handled identically at the top level and in argument position - only a non-wildcard {@code requested}
-     * distinguishes covariance from invariance.
-     */
-    private static boolean wildcardCompatible(final WildcardTypeUsage wildcard,
-                                              final TypeUsage candidate,
+    private static boolean argumentsContained(final GenericTypeUsage supertype,
+                                              final GenericTypeUsage subtypeInstantiation,
                                               final JDKCodeModel codeModel) {
 
-        if (candidate instanceof WildcardTypeUsage candidateWildcard) {
-            return wildcardsCompatible(wildcard, candidateWildcard, codeModel);
+        final var supertypeArguments = supertype.parameters().toList();
+        final var subtypeArguments = subtypeInstantiation.parameters().toList();
+
+        return supertypeArguments.size() == subtypeArguments.size()
+            && IntStream.range(0, supertypeArguments.size())
+            .allMatch(i -> contains(supertypeArguments.get(i), subtypeArguments.get(i), codeModel));
+    }
+
+    /**
+     * Determines if the type argument {@code container} <i>contains</i> {@code contained} per the containment
+     * rules of
+     * <a href="https://docs.oracle.com/javase/specs/jls/se25/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a> - i.e.
+     * whether {@code Foo<contained>} is a subtype of {@code Foo<container>}. Containment is asymmetric.
+     *
+     * <p>A non-wildcard {@code container} contains only itself: a concrete type argument is invariant, so a
+     * {@code Person} argument never matches a requested {@code Car} argument even where the two are otherwise
+     * related. A generic {@code container} such as {@code List<String>} still recurses, matching only an
+     * equal instantiation (or a raw {@code List} usage).
+     *
+     * <p>{@code ? super S} contains {@code contained} only when {@code contained} is itself {@code ? super C}
+     * with {@code S} a subtype of {@code C} - an {@code extends}-bounded or unbounded {@code contained} has
+     * no guaranteed lower bound and can never satisfy a {@code super} container, not even one bounded by
+     * {@code Object}.
+     *
+     * <p>{@code ? extends S} - including the unbounded {@code ?}, which JLS treats as
+     * {@code ? extends Object} - contains {@code contained} when {@code contained}'s <em>effective upper
+     * bound</em> (its own {@code extends} bound, or {@code Object} if it is unbounded or only
+     * {@code super}-bounded) is a subtype of {@code S}. A non-wildcard {@code contained} is contained by
+     * {@code ? extends S} when it is a subtype of {@code S}, and by {@code ? super S} when {@code S} is a
+     * subtype of it.
+     */
+    private static boolean contains(final TypeUsage container,
+                                    final TypeUsage contained,
+                                    final JDKCodeModel codeModel) {
+
+        if (!(container instanceof WildcardTypeUsage containerWildcard)) {
+            return !(contained instanceof WildcardTypeUsage)
+                && isSameArgument(container, contained, codeModel);
         }
 
-        return wildcard.upperBound()
-                .map(bound -> isBoundAssignable(candidate, bound, codeModel))
+        if (contained instanceof WildcardTypeUsage containedWildcard) {
+            return wildcardContainsWildcard(containerWildcard, containedWildcard, codeModel);
+        }
+
+        return containerWildcard.upperBound()
+                .map(bound -> isAssignable(contained, bound, codeModel))
                 .orElse(true)
-            && wildcard.lowerBound()
-                .map(bound -> isBoundAssignable(bound, candidate, codeModel))
+            && containerWildcard.lowerBound()
+                .map(bound -> isAssignable(bound, contained, codeModel))
                 .orElse(true);
     }
 
     /**
-     * Checks whether {@code from} is assignable to {@code to} for the purpose of comparing a wildcard bound,
-     * where {@code to} may itself be a parameterized generic type.
-     * {@link #isAssignable(TypeUsage, TypeUsage, JDKCodeModel)} on its own is raw-hierarchy based - it would
-     * report {@code List<Integer>} as assignable to {@code List<String>} purely because the raw types match -
-     * so when {@code to} carries concrete type arguments the check is routed through
-     * {@link #isCompatible(TypeUsage, TypeUsage, JDKCodeModel)} instead, which enforces the
-     * <a href="https://docs.oracle.com/javase/specs/jls/se25/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a> argument
-     * invariance (recursing back here for any wildcard bounds nested inside those arguments). The recursion
-     * terminates because each hop strips one level of generic nesting.
+     * Whether two non-wildcard type arguments are the same for invariance purposes - equal canonical name
+     * for a plain type, or the same generic instantiation for a parameterized one. Sameness of a
+     * parameterized argument is <em>mutual</em> containment (recursively, via
+     * {@link #argumentsContained(GenericTypeUsage, GenericTypeUsage, JDKCodeModel)} both ways): a nested
+     * wildcard is still invariant here, so {@code List<? extends Impl>} is not the same argument as
+     * {@code List<? extends Base>} even though {@code Impl} is a subtype of {@code Base}. A raw
+     * {@code contained} usage of {@code container}'s own raw type matches any parameterization.
      */
-    private static boolean isBoundAssignable(final TypeUsage from,
-                                             final TypeUsage to,
-                                             final JDKCodeModel codeModel) {
+    private static boolean isSameArgument(final TypeUsage container,
+                                          final TypeUsage contained,
+                                          final JDKCodeModel codeModel) {
 
-        return to instanceof GenericTypeUsage toGeneric && toGeneric.parameters().findAny().isPresent()
-            ? isCompatible(to, from, codeModel)
-            : isAssignable(from, to, codeModel);
+        if (!(container instanceof GenericTypeUsage containerGeneric)) {
+            return container.canonicalName().equals(contained.canonicalName());
+        }
+
+        if (!(contained instanceof NamedTypeUsage containedNamed)
+            || !containerGeneric.typeName().equals(containedNamed.typeName())) {
+            return false;
+        }
+
+        return !(contained instanceof GenericTypeUsage containedGeneric)
+            || containedGeneric.parameters().findAny().isEmpty()
+            || (argumentsContained(containerGeneric, containedGeneric, codeModel)
+                && argumentsContained(containedGeneric, containerGeneric, codeModel));
     }
 
     /**
-     * Determines if {@code candidate} is <i>contained by</i> {@code requested} per the type argument
-     * containment rules of
-     * <a href="https://docs.oracle.com/javase/specs/jls/se25/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a> - i.e.
-     * whether a {@code List<candidate>} usage would be assignable wherever a {@code List<requested>} usage is
-     * expected. Containment is asymmetric.
-     *
-     * <p>When {@code requested} is {@code ? super S}, only a {@code candidate} that is itself
-     * {@code ? super C} can be contained, and only when {@code S} is assignable to {@code C} (candidate's
-     * lower bound reaches at least as low as {@code S}); an {@code extends}-bounded or unbounded
-     * {@code candidate} has no guaranteed lower bound at all and can never satisfy a {@code super}
-     * requirement, per JLS - not even one with a {@code super Object} bound.
-     *
-     * <p>When {@code requested} is {@code ? extends S} - including the unbounded {@code ?}, which JLS treats
-     * as {@code ? extends Object} - containment reduces to comparing each side's <i>effective upper bound</i>:
-     * {@code S} for {@code requested}, and for {@code candidate} either its own {@code extends} bound, or
-     * {@code Object} if {@code candidate} is unbounded or only {@code super}-bounded (since neither guarantees
-     * anything tighter) - requiring {@code candidate}'s effective upper bound to be assignable to
-     * {@code requested}'s.
+     * Applies the two-wildcard cases of {@link #contains(TypeUsage, TypeUsage, JDKCodeModel)}:
+     * {@code ? super S} contains {@code ? super C} iff {@code S} is a subtype of {@code C}; otherwise
+     * (both effectively {@code extends}-bounded) containment compares effective upper bounds, requiring
+     * {@code contained}'s to be a subtype of {@code container}'s.
      */
-    private static boolean wildcardsCompatible(final WildcardTypeUsage requested,
-                                               final WildcardTypeUsage candidate,
-                                               final JDKCodeModel codeModel) {
+    private static boolean wildcardContainsWildcard(final WildcardTypeUsage container,
+                                                    final WildcardTypeUsage contained,
+                                                    final JDKCodeModel codeModel) {
 
-        if (requested.lowerBound().isPresent()) {
-            final var requestedLower = requested.lowerBound().orElseThrow();
+        if (container.lowerBound().isPresent()) {
+            final var containerLower = container.lowerBound().orElseThrow();
 
-            return candidate.lowerBound()
-                .map(candidateLower -> isBoundAssignable(requestedLower, candidateLower, codeModel))
+            return contained.lowerBound()
+                .map(containedLower -> isAssignable(containerLower, containedLower, codeModel))
                 .orElse(false);
         }
 
-        final var requestedUpper = requested.upperBound()
+        final var containerUpper = container.upperBound()
             .orElseGet(() -> codeModel.getTypeUsage(Object.class));
-        final var candidateUpper = candidate.upperBound()
+        final var containedUpper = contained.upperBound()
             .orElseGet(() -> codeModel.getTypeUsage(Object.class));
 
-        return isBoundAssignable(candidateUpper, requestedUpper, codeModel);
+        return isAssignable(containedUpper, containerUpper, codeModel);
     }
 
     /**
@@ -571,9 +530,7 @@ public final class TypeUsages {
                                         final Map<TypeName, TypeUsage> substitution,
                                         final JDKCodeModel codeModel) {
 
-        // WildcardTypeUsage extends TypeVariableUsage in the foundation model, so this check must come
-        // first: a wildcard falling through to the TypeVariableUsage branch would be looked up by its
-        // (synthetic) type name, never match a real binding, and come back with its bounds unsubstituted.
+        // WildcardTypeUsage extends TypeVariableUsage, so this check must precede the TypeVariableUsage one
         if (usage instanceof WildcardTypeUsage wildcard) {
             return WildcardTypeUsage.of(codeModel,
                 wildcard.lowerBound().map(bound -> Lazy.of(substitute(bound, substitution, codeModel))),
@@ -599,35 +556,37 @@ public final class TypeUsages {
     }
 
     /**
-     * Determines if {@code from} is assignable to {@code to}, scanning either side into {@code codeModel} on
-     * demand via {@link JDKCodeModel#getJDKTypeDescriptor(TypeName)} if not already present, so callers never
-     * need to have pre-scanned the participating types themselves. Treats a type that cannot be resolved to a
-     * loadable {@link Class} at all (for example a purely source-modeled type with no corresponding runtime
-     * class) as not assignable, rather than failing the whole lookup. Identical {@link TypeName}s are treated
-     * as assignable without a model lookup, short-circuiting before either side needs to be resolved.
+     * Determines if {@code subtype} is a subtype of {@code supertype} at the level of <em>erasure</em> - the
+     * raw class / interface hierarchy only, ignoring any generic type arguments either side carries.
+     * {@link #isAssignable(TypeUsage, TypeUsage, JDKCodeModel)} is the generic-aware check layered on top of
+     * this one.
      *
-     * @param from      the {@link TypeUsage} to check assignability from
-     * @param to        the {@link TypeUsage} to check assignability to
-     * @param codeModel the {@link JDKCodeModel} used to scan either side into the model on demand
-     * @return {@code true} if {@code from} is assignable to {@code to}, {@code false} otherwise
+     * <p>Scans either side into {@code codeModel} on demand via
+     * {@link JDKCodeModel#getJDKTypeDescriptor(TypeName)} if not already present, so callers never need to
+     * have pre-scanned the participating types themselves. A type that cannot be resolved to a loadable
+     * {@link Class} at all (for example a purely source-modeled type with no corresponding runtime class) is
+     * treated as not a subtype rather than failing the whole lookup. Identical {@link TypeName}s
+     * short-circuit to {@code true} before either side needs to be resolved; a {@link TypeUsage} that isn't a
+     * {@link NamedTypeUsage} (an array, a wildcard) falls back to plain canonical-name equality.
      */
-    public static boolean isAssignable(final TypeUsage from,
-                                       final TypeUsage to,
-                                       final JDKCodeModel codeModel) {
+    private static boolean isErasedSubtype(final TypeUsage subtype,
+                                           final TypeUsage supertype,
+                                           final JDKCodeModel codeModel) {
 
-        if (!(from instanceof NamedTypeUsage fromNamed) || !(to instanceof NamedTypeUsage toNamed)) {
-            return from.canonicalName().equals(to.canonicalName());
+        if (!(subtype instanceof NamedTypeUsage subtypeNamed)
+            || !(supertype instanceof NamedTypeUsage supertypeNamed)) {
+            return subtype.canonicalName().equals(supertype.canonicalName());
         }
 
-        if (fromNamed.typeName().equals(toNamed.typeName())) {
+        if (subtypeNamed.typeName().equals(supertypeNamed.typeName())) {
             return true;
         }
 
-        final var fromDescriptor = codeModel.getJDKTypeDescriptor(fromNamed.typeName());
-        final var toDescriptor = codeModel.getJDKTypeDescriptor(toNamed.typeName());
+        final var subtypeDescriptor = codeModel.getJDKTypeDescriptor(subtypeNamed.typeName());
+        final var supertypeDescriptor = codeModel.getJDKTypeDescriptor(supertypeNamed.typeName());
 
-        return fromDescriptor.isPresent()
-            && toDescriptor.isPresent()
-            && fromDescriptor.get().isAssignableTo(toDescriptor.get());
+        return subtypeDescriptor.isPresent()
+            && supertypeDescriptor.isPresent()
+            && subtypeDescriptor.get().isAssignableTo(supertypeDescriptor.get());
     }
 }

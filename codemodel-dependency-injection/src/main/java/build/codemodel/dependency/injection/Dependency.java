@@ -102,7 +102,8 @@ public interface Dependency {
      * Looks up the value registered for {@code requested} in {@code candidates}, keyed by {@link Dependency}.
      * An exact key match (same {@link #signature()}) always wins outright. On a miss, {@code candidates} is
      * searched for the {@link Dependency} whose qualifiers match {@code requested}'s exactly and whose
-     * {@link #typeUsage()} is {@link TypeUsages#isCompatible(TypeUsage, TypeUsage, JDKCodeModel) compatible} -
+     * {@link #typeUsage()} is a
+     * {@link TypeUsages#isAssignable(TypeUsage, TypeUsage, JDKCodeModel) subtype} of {@code requested}'s -
      * this is what lets a wildcard-bearing request (e.g. {@code Class<? extends Base>} or
      * {@code Set<? extends Base>}) be satisfied by a registered candidate that doesn't match it exactly (e.g.
      * {@code Class<Impl>}), without ever letting a wildcard-fallback candidate override an exact match, and
@@ -129,7 +130,7 @@ public interface Dependency {
 
         final var compatible = candidates.entrySet().stream()
             .filter(entry -> qualifierSignature(entry.getKey()).equals(requestedQualifierSignature))
-            .filter(entry -> TypeUsages.isCompatible(requested.typeUsage(), entry.getKey().typeUsage(), codeModel))
+            .filter(entry -> TypeUsages.isAssignable(entry.getKey().typeUsage(), requested.typeUsage(), codeModel))
             .toList();
 
         if (compatible.size() > 1) {
