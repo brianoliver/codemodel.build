@@ -21,6 +21,7 @@ package build.codemodel.jdk;
  */
 
 import build.base.foundation.Introspection;
+import build.base.foundation.Lazy;
 import build.codemodel.foundation.naming.Namespace;
 import build.codemodel.foundation.naming.TypeName;
 import build.codemodel.foundation.usage.ArrayTypeUsage;
@@ -28,15 +29,23 @@ import build.codemodel.foundation.usage.GenericTypeUsage;
 import build.codemodel.foundation.usage.NamedTypeUsage;
 import build.codemodel.foundation.usage.SpecificTypeUsage;
 import build.codemodel.foundation.usage.TypeUsage;
+import build.codemodel.foundation.usage.TypeVariableUsage;
 import build.codemodel.foundation.usage.WildcardTypeUsage;
+import build.codemodel.jdk.descriptor.JDKTypeDescriptor;
+import build.codemodel.objectoriented.descriptor.ParameterizedTypeDescriptor;
 
 import java.lang.reflect.Type;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 /**
  * Helper methods for working with JDK-based {@link TypeUsage}s.
@@ -258,7 +267,7 @@ public final class TypeUsages {
      * supertype).
      *
      * <p>This is distinct from the <i>invariant</i> rules governing {@code requested}'s own generic type
-     * arguments, if it has any - per <a href="https://docs.oracle.com/javase/specs/jls/se21/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a>,
+     * arguments, if it has any - per <a href="https://docs.oracle.com/javase/specs/jls/se25/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a>,
      * a concrete type argument (no wildcard) must match exactly, since {@code List<Impl>} is never
      * compatible with a requested {@code List<Base>} even though {@code Impl} is compatible with
      * {@code Base} at the top level. Each type argument is compared via
@@ -299,14 +308,23 @@ public final class TypeUsages {
 
         if (!requestedGeneric.typeName().equals(candidateNamed.typeName())) {
             // candidate isn't a usage of the same generic declaration as requested, so there's no
-            // positional type argument list to compare invariantly against requested's. If candidate
-            // itself carries no reified type argument, it's a raw usage compatible with any
-            // parameterization, so ordinary raw (erasure) assignability governs; otherwise candidate is
-            // concretely parameterized down a different branch of the hierarchy (e.g. ArrayList<Impl>
-            // against a requested List<Base>) and verifying invariance would require substituting type
-            // arguments through the intervening supertypes, which isn't modeled here - conservatively
-            // treat it as incompatible rather than risk a false positive by ignoring the argument
-            // mismatch entirely
+            // positional type argument list to compare directly against requested's. Substitute
+            // candidate's reified type arguments (and any concrete instantiations its own supertypes are
+            // written with, e.g. class IntList extends ArrayList<Integer>) through the intervening
+            // generic supertypes to arrive at the instantiation of requested's raw type that candidate
+            // actually implements (e.g. ArrayList<Base> -> List<Base>), then compare that positionally
+            // against requested.
+            final var instantiated = instantiatedSupertype(
+                requestedGeneric.typeName(), candidateNamed, codeModel, new HashSet<>());
+            if (instantiated.isPresent()) {
+                return parametersCompatible(requestedGeneric, instantiated.get(), codeModel);
+            }
+
+            // the walk was inconclusive - no concrete instantiation of requested's raw type reachable
+            // from candidate. If candidate carries no reified type argument of its own it's a raw usage,
+            // compatible with any parameterization, so ordinary raw (erasure) assignability governs;
+            // otherwise a raw/erased link somewhere in the chain leaves invariance unverifiable, so
+            // conservatively treat it as incompatible rather than ignore the argument mismatch entirely.
             return (!(candidate instanceof GenericTypeUsage candidateGenericRawCheck)
                     || candidateGenericRawCheck.parameters().findAny().isEmpty())
                 && isAssignable(candidate, requested, codeModel);
@@ -343,7 +361,7 @@ public final class TypeUsages {
     /**
      * Determines if {@code candidate} is compatible with {@code requested} in a generic type <i>argument</i>
      * position, per the invariant containment rules of
-     * <a href="https://docs.oracle.com/javase/specs/jls/se21/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a> - unlike
+     * <a href="https://docs.oracle.com/javase/specs/jls/se25/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a> - unlike
      * {@link #isCompatible(TypeUsage, TypeUsage, JDKCodeModel)}, a concrete (non-wildcard) {@code requested}
      * argument requires an exact match rather than mere assignability, since generic type arguments are
      * invariant without a wildcard.
@@ -401,17 +419,37 @@ public final class TypeUsages {
         }
 
         return wildcard.upperBound()
-                .map(bound -> isAssignable(candidate, bound, codeModel))
+                .map(bound -> isBoundAssignable(candidate, bound, codeModel))
                 .orElse(true)
             && wildcard.lowerBound()
-                .map(bound -> isAssignable(bound, candidate, codeModel))
+                .map(bound -> isBoundAssignable(bound, candidate, codeModel))
                 .orElse(true);
+    }
+
+    /**
+     * Checks whether {@code from} is assignable to {@code to} for the purpose of comparing a wildcard bound,
+     * where {@code to} may itself be a parameterized generic type.
+     * {@link #isAssignable(TypeUsage, TypeUsage, JDKCodeModel)} on its own is raw-hierarchy based - it would
+     * report {@code List<Integer>} as assignable to {@code List<String>} purely because the raw types match -
+     * so when {@code to} carries concrete type arguments the check is routed through
+     * {@link #isCompatible(TypeUsage, TypeUsage, JDKCodeModel)} instead, which enforces the
+     * <a href="https://docs.oracle.com/javase/specs/jls/se25/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a> argument
+     * invariance (recursing back here for any wildcard bounds nested inside those arguments). The recursion
+     * terminates because each hop strips one level of generic nesting.
+     */
+    private static boolean isBoundAssignable(final TypeUsage from,
+                                             final TypeUsage to,
+                                             final JDKCodeModel codeModel) {
+
+        return to instanceof GenericTypeUsage toGeneric && toGeneric.parameters().findAny().isPresent()
+            ? isCompatible(to, from, codeModel)
+            : isAssignable(from, to, codeModel);
     }
 
     /**
      * Determines if {@code candidate} is <i>contained by</i> {@code requested} per the type argument
      * containment rules of
-     * <a href="https://docs.oracle.com/javase/specs/jls/se21/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a> - i.e.
+     * <a href="https://docs.oracle.com/javase/specs/jls/se25/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a> - i.e.
      * whether a {@code List<candidate>} usage would be assignable wherever a {@code List<requested>} usage is
      * expected. Containment is asymmetric.
      *
@@ -436,7 +474,7 @@ public final class TypeUsages {
             final var requestedLower = requested.lowerBound().orElseThrow();
 
             return candidate.lowerBound()
-                .map(candidateLower -> isAssignable(requestedLower, candidateLower, codeModel))
+                .map(candidateLower -> isBoundAssignable(requestedLower, candidateLower, codeModel))
                 .orElse(false);
         }
 
@@ -445,7 +483,119 @@ public final class TypeUsages {
         final var candidateUpper = candidate.upperBound()
             .orElseGet(() -> codeModel.getTypeUsage(Object.class));
 
-        return isAssignable(candidateUpper, requestedUpper, codeModel);
+        return isBoundAssignable(candidateUpper, requestedUpper, codeModel);
+    }
+
+    /**
+     * Walks {@code candidate}'s supertype hierarchy looking for the instantiation of {@code targetRawType}
+     * that {@code candidate} actually implements, substituting {@code candidate}'s reified type arguments for
+     * its declared type variables at each step (e.g. {@code ArrayList<Base>} carries {@code E = Base}, which
+     * propagates through {@code List<E>} to yield {@code List<Base>}).
+     *
+     * <p>Returns {@link Optional#empty()} when the invariance can't be verified precisely: {@code candidate}'s
+     * type descriptor (or that of an intervening supertype) isn't resolvable in {@code codeModel}, its declared
+     * type-variable arity doesn't line up with the reified arguments, or a supertype in the chain is written
+     * raw (erasing the arguments). Callers treat an empty result as incompatible.
+     *
+     * @param targetRawType the raw {@link TypeName} whose instantiation is sought
+     * @param candidate     the {@link NamedTypeUsage} to walk upward from
+     * @param codeModel     the {@link JDKCodeModel} used to resolve each type's descriptor on demand
+     * @param visited       the raw {@link TypeName}s already visited on this path, guarding against cycles
+     * @return the {@link GenericTypeUsage} instantiation of {@code targetRawType}, or {@link Optional#empty()}
+     */
+    private static Optional<GenericTypeUsage> instantiatedSupertype(final TypeName targetRawType,
+                                                                    final NamedTypeUsage candidate,
+                                                                    final JDKCodeModel codeModel,
+                                                                    final Set<TypeName> visited) {
+
+        if (candidate.typeName().equals(targetRawType)) {
+            // only a genuinely parameterized instantiation lets the caller verify invariance; a raw link
+            // that happens to land on the target leaves nothing to compare, so defer to erasure assignability
+            return candidate instanceof GenericTypeUsage generic && generic.parameters().findAny().isPresent()
+                ? Optional.of(generic)
+                : Optional.empty();
+        }
+
+        if (!visited.add(candidate.typeName())) {
+            return Optional.empty();
+        }
+
+        final var descriptor = codeModel.getJDKTypeDescriptor(candidate.typeName());
+        if (descriptor.isEmpty()) {
+            return Optional.empty();
+        }
+
+        final List<TypeVariableUsage> declared = descriptor.get()
+            .getTrait(ParameterizedTypeDescriptor.class)
+            .map(parameterized -> parameterized.typeVariables().toList())
+            .orElse(List.of());
+
+        final List<TypeUsage> arguments = candidate instanceof GenericTypeUsage generic
+            ? generic.parameters().toList()
+            : List.of();
+
+        if (declared.size() != arguments.size()) {
+            // a raw link in the chain (arguments erased), or a modeling mismatch - can't substitute precisely
+            return Optional.empty();
+        }
+
+        final Map<TypeName, TypeUsage> substitution = new HashMap<>();
+        for (var i = 0; i < declared.size(); i++) {
+            substitution.put(declared.get(i).typeName(), arguments.get(i));
+        }
+
+        return directSupertypeUsages(descriptor.get())
+            .map(parent -> substitute(parent, substitution, codeModel))
+            .flatMap(parent -> parent instanceof NamedTypeUsage named
+                ? instantiatedSupertype(targetRawType, named, codeModel, visited).stream()
+                : Stream.empty())
+            .findFirst();
+    }
+
+    /**
+     * The direct superclass and directly-implemented interface {@link TypeUsage}s of {@code descriptor}, as
+     * declared (i.e. still bearing {@code descriptor}'s own type variables where the supertype is generic).
+     */
+    private static Stream<NamedTypeUsage> directSupertypeUsages(final JDKTypeDescriptor descriptor) {
+        return Stream.concat(descriptor.parentTypeUsage().stream(), descriptor.interfaceTypeUsages());
+    }
+
+    /**
+     * Substitutes {@code substitution}'s type-variable bindings throughout {@code usage}, recursing into the
+     * type arguments of a {@link GenericTypeUsage}, the bounds of a {@link WildcardTypeUsage}, and the
+     * component of an {@link ArrayTypeUsage} (so a supertype clause such as {@code implements List<T[]>}
+     * substitutes correctly). A {@link TypeVariableUsage} with no binding, and any other {@link TypeUsage},
+     * is returned unchanged.
+     */
+    private static TypeUsage substitute(final TypeUsage usage,
+                                        final Map<TypeName, TypeUsage> substitution,
+                                        final JDKCodeModel codeModel) {
+
+        // WildcardTypeUsage extends TypeVariableUsage in the foundation model, so this check must come
+        // first: a wildcard falling through to the TypeVariableUsage branch would be looked up by its
+        // (synthetic) type name, never match a real binding, and come back with its bounds unsubstituted.
+        if (usage instanceof WildcardTypeUsage wildcard) {
+            return WildcardTypeUsage.of(codeModel,
+                wildcard.lowerBound().map(bound -> Lazy.of(substitute(bound, substitution, codeModel))),
+                wildcard.upperBound().map(bound -> Lazy.of(substitute(bound, substitution, codeModel))));
+        }
+
+        if (usage instanceof TypeVariableUsage variable) {
+            return substitution.getOrDefault(variable.typeName(), usage);
+        }
+
+        if (usage instanceof GenericTypeUsage generic) {
+            final var substituted = generic.parameters()
+                .map(parameter -> substitute(parameter, substitution, codeModel))
+                .toArray(TypeUsage[]::new);
+            return GenericTypeUsage.of(codeModel, generic.typeName(), substituted);
+        }
+
+        if (usage instanceof ArrayTypeUsage array) {
+            return ArrayTypeUsage.of(codeModel, Lazy.of(substitute(array.type(), substitution, codeModel)));
+        }
+
+        return usage;
     }
 
     /**

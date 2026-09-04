@@ -102,6 +102,25 @@ class TypeUsagesTests {
     }
 
     /**
+     * A non-generic subtype whose generic superclass is already fully instantiated ({@code ArrayList<Base>}) -
+     * the "{@code class IntList extends ArrayList<Integer>}" shape. It declares no type variables of its own,
+     * so the substitution map is empty and the concrete {@code Base} argument flows straight up.
+     */
+    static class BaseArrayList
+        extends java.util.ArrayList<Base> {
+    }
+
+    /**
+     * A generic interface whose supertype clause nests a wildcard bound built from the interface's own type
+     * variable ({@code Bag<T> extends Supplier<List<? extends T>>}). Walking from a {@code Bag<Impl>} usage up
+     * to {@code Supplier} must substitute {@code T = Impl} <em>into the wildcard bound</em>, yielding
+     * {@code Supplier<List<? extends Impl>>}.
+     */
+    interface Bag<T>
+        extends java.util.function.Supplier<java.util.List<? extends T>> {
+    }
+
+    /**
      * A raw {@code Class} usage (no reified generic parameter) carries no type argument to conflict with a
      * requested wildcard bound, so it should be compatible with a {@code Class<? extends Base>} request.
      */
@@ -214,7 +233,7 @@ class TypeUsagesTests {
     }
 
     /**
-     * Per <a href="https://docs.oracle.com/javase/specs/jls/se21/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a> type
+     * Per <a href="https://docs.oracle.com/javase/specs/jls/se25/html/jls-4.html#jls-4.5.1">JLS 4.5.1</a> type
      * argument containment, an {@code extends}-bounded wildcard can never be contained by a {@code super}
      * requirement, and a {@code super}-bounded wildcard can never be contained by an {@code extends}
      * requirement - regardless of how the two bounds relate to each other. {@code ? extends Base} is
@@ -302,6 +321,82 @@ class TypeUsagesTests {
                 Optional.of(Lazy.of(codeModel.getTypeUsage(Impl2.class)))));
 
         assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
+            .isFalse();
+    }
+
+    /**
+     * A generic type appearing <em>inside</em> a wildcard bound is compared with full argument invariance, not
+     * by erasure: a requested {@code ? extends List<Base>} is satisfied by a candidate {@code ? extends
+     * List<Base>} (and by {@code ? extends ArrayList<Base>}, a subtype instantiation carrying the same
+     * argument), but not by {@code ? extends List<Impl>} - {@code List<Impl>} is not assignable to
+     * {@code List<Base>} even though the raw types match.
+     */
+    @Test
+    void shouldCompareGenericWildcardBoundsInvariantly() {
+        final var codeModel = createCodeModel();
+        final var nameProvider = codeModel.getNameProvider();
+        final var classTypeName = nameProvider.getTypeName(Class.class);
+        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
+        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+
+        final var requested = GenericTypeUsage.of(codeModel, classTypeName,
+            WildcardTypeUsage.of(codeModel, Optional.empty(),
+                Optional.of(Lazy.of(GenericTypeUsage.of(codeModel, listTypeName,
+                    codeModel.getTypeUsage(Base.class))))));
+
+        final var matchingBound = GenericTypeUsage.of(codeModel, classTypeName,
+            WildcardTypeUsage.of(codeModel, Optional.empty(),
+                Optional.of(Lazy.of(GenericTypeUsage.of(codeModel, listTypeName,
+                    codeModel.getTypeUsage(Base.class))))));
+        final var subtypeBound = GenericTypeUsage.of(codeModel, classTypeName,
+            WildcardTypeUsage.of(codeModel, Optional.empty(),
+                Optional.of(Lazy.of(GenericTypeUsage.of(codeModel, arrayListTypeName,
+                    codeModel.getTypeUsage(Base.class))))));
+        final var mismatchedArgumentBound = GenericTypeUsage.of(codeModel, classTypeName,
+            WildcardTypeUsage.of(codeModel, Optional.empty(),
+                Optional.of(Lazy.of(GenericTypeUsage.of(codeModel, listTypeName,
+                    codeModel.getTypeUsage(Impl.class))))));
+
+        assertThat(TypeUsages.isCompatible(requested, matchingBound, codeModel))
+            .isTrue();
+        assertThat(TypeUsages.isCompatible(requested, subtypeBound, codeModel))
+            .isTrue();
+        assertThat(TypeUsages.isCompatible(requested, mismatchedArgumentBound, codeModel))
+            .isFalse();
+    }
+
+    /**
+     * The invariant comparison of a generic type inside a wildcard bound applies to {@code super} bounds too:
+     * a requested {@code ? super List<Base>} is satisfied by {@code ? super List<Base>} but not by
+     * {@code ? super List<Impl>}.
+     */
+    @Test
+    void shouldCompareGenericSuperWildcardBoundsInvariantly() {
+        final var codeModel = createCodeModel();
+        final var nameProvider = codeModel.getNameProvider();
+        final var classTypeName = nameProvider.getTypeName(Class.class);
+        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
+
+        final var requested = GenericTypeUsage.of(codeModel, classTypeName,
+            WildcardTypeUsage.of(codeModel,
+                Optional.of(Lazy.of(GenericTypeUsage.of(codeModel, listTypeName,
+                    codeModel.getTypeUsage(Base.class)))),
+                Optional.empty()));
+
+        final var matchingBound = GenericTypeUsage.of(codeModel, classTypeName,
+            WildcardTypeUsage.of(codeModel,
+                Optional.of(Lazy.of(GenericTypeUsage.of(codeModel, listTypeName,
+                    codeModel.getTypeUsage(Base.class)))),
+                Optional.empty()));
+        final var mismatchedArgumentBound = GenericTypeUsage.of(codeModel, classTypeName,
+            WildcardTypeUsage.of(codeModel,
+                Optional.of(Lazy.of(GenericTypeUsage.of(codeModel, listTypeName,
+                    codeModel.getTypeUsage(Impl.class)))),
+                Optional.empty()));
+
+        assertThat(TypeUsages.isCompatible(requested, matchingBound, codeModel))
+            .isTrue();
+        assertThat(TypeUsages.isCompatible(requested, mismatchedArgumentBound, codeModel))
             .isFalse();
     }
 
@@ -402,12 +497,12 @@ class TypeUsagesTests {
 
     /**
      * A candidate that is a subtype of {@code requested}'s raw type but under a <em>different</em> raw type
-     * of its own (e.g. {@code ArrayList} against a requested {@code List}) can't have its own type argument
-     * checked positionally against {@code requested}'s, since there's no shared parameter list to compare -
-     * doing so would require substituting type arguments through the intervening supertypes (e.g.
-     * {@code ArrayList<Impl>}'s {@code E} through {@code AbstractList<E>} to {@code List<E>}), which isn't
-     * modeled. Rather than ignore the candidate's own argument entirely and risk a false positive, this case
-     * is conservatively treated as incompatible even though {@code ArrayList} actually implements {@code List}.
+     * of its own (e.g. {@code ArrayList<Impl>} against a requested {@code List<Base>}) has its reified type
+     * argument substituted through the intervening supertypes (here {@code ArrayList<Impl>}'s {@code E}
+     * through {@code AbstractList<E>} to {@code List<E>}, yielding {@code List<Impl>}) and then compared
+     * positionally against {@code requested}. {@code List<Impl>} is not compatible with a requested
+     * {@code List<Base>}, so this remains incompatible - but now because the substituted argument genuinely
+     * mismatches, not merely because the raw types differ.
      */
     @Test
     void shouldBeIncompatibleWhenDifferentRawTypeCandidateHasItsOwnTypeArgument() {
@@ -420,6 +515,213 @@ class TypeUsagesTests {
         final var candidate = GenericTypeUsage.of(codeModel, arrayListTypeName, codeModel.getTypeUsage(Impl.class));
 
         assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
+            .isFalse();
+    }
+
+    /**
+     * {@code isCompatible} verifies generic-argument invariance across a raw-type change by substituting the
+     * candidate's reified type arguments through its generic supertypes. {@code ArrayList<Base>} is genuinely
+     * compatible with a requested {@code List<Base>} per the JLS - {@code ArrayList<E>} implements
+     * {@code List<E>}, so with {@code E = Base} the candidate really is a {@code List<Base>} - and
+     * substituting {@code Base} for {@code ArrayList}'s {@code E} up through {@code AbstractList<E>} to
+     * {@code List<E>} arrives at exactly that instantiation, which matches {@code requested} positionally.
+     */
+    @Test
+    void shouldVerifyInvarianceAcrossARawTypeChange() {
+        final var codeModel = createCodeModel();
+        final var nameProvider = codeModel.getNameProvider();
+        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
+        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+
+        final var requested = GenericTypeUsage.of(codeModel, listTypeName, codeModel.getTypeUsage(Base.class));
+        final var candidate = GenericTypeUsage.of(codeModel, arrayListTypeName, codeModel.getTypeUsage(Base.class));
+
+        assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
+            .isTrue();
+    }
+
+    /**
+     * Generic supertype substitution walks the whole chain, not just the immediate parent -
+     * {@code ArrayList<Base>}'s {@code E = Base} propagates through {@code AbstractList} / {@code AbstractCollection}
+     * up to {@code Collection<E>}, so {@code ArrayList<Base>} is compatible with a requested
+     * {@code Collection<Base>} but not with {@code Collection<Impl>}.
+     */
+    @Test
+    void shouldSubstituteThroughMultipleGenericSupertypes() {
+        final var codeModel = createCodeModel();
+        final var nameProvider = codeModel.getNameProvider();
+        final var collectionTypeName = nameProvider.getTypeName(java.util.Collection.class);
+        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+
+        final var candidate = GenericTypeUsage.of(codeModel, arrayListTypeName, codeModel.getTypeUsage(Base.class));
+
+        final var matching = GenericTypeUsage.of(codeModel, collectionTypeName, codeModel.getTypeUsage(Base.class));
+        final var mismatched = GenericTypeUsage.of(codeModel, collectionTypeName, codeModel.getTypeUsage(Impl.class));
+
+        assertThat(TypeUsages.isCompatible(matching, candidate, codeModel))
+            .isTrue();
+        assertThat(TypeUsages.isCompatible(mismatched, candidate, codeModel))
+            .isFalse();
+    }
+
+    /**
+     * A non-generic candidate whose superclass is an already-instantiated generic ({@code BaseArrayList
+     * extends ArrayList<Base>}) still has its inherited argument checked: the concrete {@code Base} flows up
+     * through {@code ArrayList<Base>} to {@code List<Base>}, compatible with a requested {@code List<Base>}
+     * but not a requested {@code List<Impl>}.
+     */
+    @Test
+    void shouldSubstituteThroughAnAlreadyInstantiatedGenericSuperclass() {
+        final var codeModel = createCodeModel();
+        final var nameProvider = codeModel.getNameProvider();
+        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
+
+        final var candidate = codeModel.getTypeUsage(BaseArrayList.class);
+
+        final var matching = GenericTypeUsage.of(codeModel, listTypeName, codeModel.getTypeUsage(Base.class));
+        final var mismatched = GenericTypeUsage.of(codeModel, listTypeName, codeModel.getTypeUsage(Impl.class));
+
+        assertThat(TypeUsages.isCompatible(matching, candidate, codeModel))
+            .isTrue();
+        assertThat(TypeUsages.isCompatible(mismatched, candidate, codeModel))
+            .isFalse();
+    }
+
+    /**
+     * Substitution walks interface-to-interface links too, not just class superclasses - {@code ArrayList<Base>}
+     * reaches {@code Iterable<Base>} through {@code Collection<E>}, so it's compatible with a requested
+     * {@code Iterable<Base>} and not with {@code Iterable<Impl>}.
+     */
+    @Test
+    void shouldSubstituteThroughInterfaceInheritance() {
+        final var codeModel = createCodeModel();
+        final var nameProvider = codeModel.getNameProvider();
+        final var iterableTypeName = nameProvider.getTypeName(Iterable.class);
+        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+
+        final var candidate = GenericTypeUsage.of(codeModel, arrayListTypeName, codeModel.getTypeUsage(Base.class));
+
+        final var matching = GenericTypeUsage.of(codeModel, iterableTypeName, codeModel.getTypeUsage(Base.class));
+        final var mismatched = GenericTypeUsage.of(codeModel, iterableTypeName, codeModel.getTypeUsage(Impl.class));
+
+        assertThat(TypeUsages.isCompatible(matching, candidate, codeModel))
+            .isTrue();
+        assertThat(TypeUsages.isCompatible(mismatched, candidate, codeModel))
+            .isFalse();
+    }
+
+    /**
+     * After substitution the resulting instantiation is compared through the ordinary argument-compatibility
+     * rules, so a wildcard-bearing {@code requested} still relaxes invariance: {@code ArrayList<Impl>}
+     * substitutes to {@code List<Impl>}, which satisfies a requested {@code List<? extends Base>} but not
+     * {@code List<? extends Impl2>}.
+     */
+    @Test
+    void shouldApplyWildcardArgumentRulesToTheSubstitutedInstantiation() {
+        final var codeModel = createCodeModel();
+        final var nameProvider = codeModel.getNameProvider();
+        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
+        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+
+        final var candidate = GenericTypeUsage.of(codeModel, arrayListTypeName, codeModel.getTypeUsage(Impl.class));
+
+        final var extendsBase = GenericTypeUsage.of(codeModel, listTypeName,
+            WildcardTypeUsage.of(codeModel, Optional.empty(),
+                Optional.of(Lazy.of(codeModel.getTypeUsage(Base.class)))));
+        final var extendsImpl2 = GenericTypeUsage.of(codeModel, listTypeName,
+            WildcardTypeUsage.of(codeModel, Optional.empty(),
+                Optional.of(Lazy.of(codeModel.getTypeUsage(Impl2.class)))));
+
+        assertThat(TypeUsages.isCompatible(extendsBase, candidate, codeModel))
+            .isTrue();
+        assertThat(TypeUsages.isCompatible(extendsImpl2, candidate, codeModel))
+            .isFalse();
+    }
+
+    /**
+     * The full JLS 4.5.1 containment set applies to the substituted instantiation, not just {@code extends}
+     * bounds. {@code ArrayList<Base>} substitutes to {@code List<Base>}: {@code Base} is contained by a
+     * requested {@code ? super Impl} (via {@code Base <= ? super Base <= ? super Impl}, since
+     * {@code Impl <: Base}) and by the unbounded {@code ?}, but not by {@code ? super Unrelated}, whose lower
+     * bound is not a subtype of {@code Base}.
+     */
+    @Test
+    void shouldApplySuperAndUnboundedWildcardContainmentToTheSubstitutedInstantiation() {
+        final var codeModel = createCodeModel();
+        final var nameProvider = codeModel.getNameProvider();
+        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
+        final var arrayListTypeName = nameProvider.getTypeName(java.util.ArrayList.class);
+
+        final var baseCandidate = GenericTypeUsage.of(codeModel, arrayListTypeName,
+            codeModel.getTypeUsage(Base.class));
+
+        final var superImpl = GenericTypeUsage.of(codeModel, listTypeName,
+            WildcardTypeUsage.of(codeModel, Optional.of(Lazy.of(codeModel.getTypeUsage(Impl.class))),
+                Optional.empty()));
+        final var unbounded = GenericTypeUsage.of(codeModel, listTypeName,
+            WildcardTypeUsage.create(codeModel));
+        final var superUnrelated = GenericTypeUsage.of(codeModel, listTypeName,
+            WildcardTypeUsage.of(codeModel, Optional.of(Lazy.of(codeModel.getTypeUsage(Unrelated.class))),
+                Optional.empty()));
+
+        assertThat(TypeUsages.isCompatible(superImpl, baseCandidate, codeModel))
+            .isTrue();
+        assertThat(TypeUsages.isCompatible(unbounded, baseCandidate, codeModel))
+            .isTrue();
+        assertThat(TypeUsages.isCompatible(superUnrelated, baseCandidate, codeModel))
+            .isFalse();
+    }
+
+    /**
+     * A concretely-parameterized candidate under a raw type that never reaches {@code requested}'s raw type at
+     * all ({@code HashSet<Base>} against a requested {@code List<Base>}) is incompatible - the hierarchy walk
+     * finds no instantiation to compare.
+     */
+    @Test
+    void shouldBeIncompatibleWhenCandidateHierarchyNeverReachesRequestedRawType() {
+        final var codeModel = createCodeModel();
+        final var nameProvider = codeModel.getNameProvider();
+        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
+        final var hashSetTypeName = nameProvider.getTypeName(java.util.HashSet.class);
+
+        final var requested = GenericTypeUsage.of(codeModel, listTypeName, codeModel.getTypeUsage(Base.class));
+        final var candidate = GenericTypeUsage.of(codeModel, hashSetTypeName, codeModel.getTypeUsage(Base.class));
+
+        assertThat(TypeUsages.isCompatible(requested, candidate, codeModel))
+            .isFalse();
+    }
+
+    /**
+     * Supertype-argument substitution reaches <em>inside</em> a wildcard bound, not just top-level type
+     * arguments. {@code Bag<T>} extends {@code Supplier<List<? extends T>>}, so a {@code Bag<Impl>} usage
+     * implements {@code Supplier<List<? extends Impl>>} - the walk must push {@code T = Impl} through the
+     * {@code ? extends T} bound. That instantiation satisfies a requested {@code Supplier<List<? extends Base>>}
+     * (since {@code Impl <: Base}) but not {@code Supplier<List<? extends Impl2>>}. Regression test: with the
+     * wildcard case ordered after the type-variable case in {@code substitute}, the bound came back as
+     * {@code ? extends T} unsubstituted and both checks wrongly failed.
+     */
+    @Test
+    void shouldSubstituteIntoAWildcardBoundNestedInASupertypeArgument() {
+        final var codeModel = createCodeModel();
+        final var nameProvider = codeModel.getNameProvider();
+        final var supplierTypeName = nameProvider.getTypeName(java.util.function.Supplier.class);
+        final var listTypeName = nameProvider.getTypeName(java.util.List.class);
+        final var bagTypeName = nameProvider.getTypeName(Bag.class);
+
+        final var candidate = GenericTypeUsage.of(codeModel, bagTypeName, codeModel.getTypeUsage(Impl.class));
+
+        final var matching = GenericTypeUsage.of(codeModel, supplierTypeName,
+            GenericTypeUsage.of(codeModel, listTypeName,
+                WildcardTypeUsage.of(codeModel, Optional.empty(),
+                    Optional.of(Lazy.of(codeModel.getTypeUsage(Base.class))))));
+        final var mismatched = GenericTypeUsage.of(codeModel, supplierTypeName,
+            GenericTypeUsage.of(codeModel, listTypeName,
+                WildcardTypeUsage.of(codeModel, Optional.empty(),
+                    Optional.of(Lazy.of(codeModel.getTypeUsage(Impl2.class))))));
+
+        assertThat(TypeUsages.isCompatible(matching, candidate, codeModel))
+            .isTrue();
+        assertThat(TypeUsages.isCompatible(mismatched, candidate, codeModel))
             .isFalse();
     }
 
