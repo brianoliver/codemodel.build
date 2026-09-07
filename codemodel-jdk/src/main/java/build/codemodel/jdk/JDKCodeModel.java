@@ -35,6 +35,7 @@ import build.codemodel.foundation.CodeModel;
 import build.codemodel.foundation.descriptor.FormalParameterDescriptor;
 import build.codemodel.foundation.descriptor.ModuleDescriptor;
 import build.codemodel.foundation.descriptor.NamespaceDescriptor;
+import build.codemodel.foundation.descriptor.PolymorphicNamespaceDescriptor;
 import build.codemodel.foundation.descriptor.ThrowableDescriptor;
 import build.codemodel.foundation.descriptor.Trait;
 import build.codemodel.foundation.descriptor.Traitable;
@@ -671,6 +672,37 @@ public class JDKCodeModel
         // include the annotations on the TypeDescriptor (from the Class Type)
         getAnnotations(classType)
             .forEach(typeDescriptor::addTrait);
+
+        // include a NamespaceDescriptor for the enclosing package when its package-info carries
+        // annotations, mirroring the source-parsing path's package-info.java handling
+        populatePackageNamespace(classType);
+    }
+
+    /**
+     * Registers a {@link NamespaceDescriptor} for the package enclosing {@code classType} when that
+     * package's {@code package-info} carries annotations, attaching them via the same reflection
+     * annotation-capture used for type and member annotations. Mirrors
+     * {@code JdkInitializer.processPackageAnnotations} on the javac-source path.
+     *
+     * <p>Only an annotated package produces a descriptor, so a package with no {@code package-info}
+     * (or one without annotations, or one whose {@code package-info.class} is not loadable) is left
+     * alone. Creation uses {@code computeIfAbsent} semantics: the annotations are applied once, when
+     * the descriptor is first created for the {@link build.codemodel.foundation.naming.Namespace}.
+     *
+     * @param classType the {@link Class} whose enclosing package is considered
+     */
+    private void populatePackageNamespace(final Class<?> classType) {
+        final var pkg = classType.getPackage();
+        if (pkg == null) {
+            return;
+        }
+        final var annotations = getAnnotations(pkg).toList();
+        if (annotations.isEmpty()) {
+            return;
+        }
+        getNameProvider().getNamespace(pkg.getName()).ifPresent(namespace ->
+            createNamespaceDescriptor(namespace, PolymorphicNamespaceDescriptor::of,
+                descriptor -> annotations.forEach(descriptor::addTrait)));
     }
 
     private void populateConstructor(final JDKTypeDescriptor typeDescriptor, final Constructor<?> constructor,

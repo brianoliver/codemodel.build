@@ -22,6 +22,7 @@ package build.codemodel.jdk.populator;
 
 import build.codemodel.foundation.CodeModel;
 import build.codemodel.foundation.descriptor.FormalParameterDescriptor;
+import build.codemodel.foundation.descriptor.PolymorphicNamespaceDescriptor;
 import build.codemodel.foundation.descriptor.ThrowableDescriptor;
 import build.codemodel.foundation.descriptor.Traitable;
 import build.codemodel.foundation.naming.NameProvider;
@@ -54,6 +55,7 @@ import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.ModuleTree;
 import com.sun.source.tree.OpensTree;
+import com.sun.source.tree.PackageTree;
 import com.sun.source.tree.ProvidesTree;
 import com.sun.source.tree.RequiresTree;
 import com.sun.source.tree.Tree;
@@ -85,6 +87,7 @@ import java.util.stream.Stream;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.NestingKind;
+import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.tools.Diagnostic;
@@ -295,14 +298,14 @@ public class JdkInitializer
      * changed together, in a single pass, means there is exactly one consistent view of the whole
      * batch and no window for one file's rescan to see another in a state that never really existed.
      *
-     * <p>Every descriptor sourced from any of {@code updatedFiles} is evicted and the file is
-     * re-registered from this compile, whether or not it produced anything (a caller passing an
-     * empty-content {@link JavaFileObject} for a genuinely deleted file gets that file's descriptors
-     * evicted with nothing to replace them, as expected). There is no protection against evicting a
-     * still-existing file whose current on-disk content happens to be mid-edit and unparseable at
-     * the moment of rescan -- callers are expected to decide deletion explicitly (e.g. by checking
-     * the file still exists on disk) rather than relying on this method to infer it from a compile
-     * that produces nothing.
+     * <p>Every type, module and namespace descriptor sourced from any of {@code updatedFiles} is
+     * evicted and the file is re-registered from this compile, whether or not it produced anything
+     * (a caller passing an empty-content {@link JavaFileObject} for a genuinely deleted file gets
+     * that file's descriptors evicted with nothing to replace them, as expected). There is no
+     * protection against evicting a still-existing file whose current on-disk content happens to be
+     * mid-edit and unparseable at the moment of rescan -- callers are expected to decide deletion
+     * explicitly (e.g. by checking the file still exists on disk) rather than relying on this method
+     * to infer it from a compile that produces nothing.
      *
      * @param codeModel          the {@link JDKCodeModel} to rescan
      * @param updatedFiles       the new versions of the source files to analyze together
@@ -333,6 +336,9 @@ public class JdkInitializer
         codeModel.moduleDescriptors()
             .filter(d -> matchesAnyUri(d, uris))
             .forEach(codeModel::removeModuleDescriptor);
+        codeModel.namespaceDescriptors()
+            .filter(d -> matchesAnyUri(d, uris))
+            .forEach(codeModel::removeNamespaceDescriptor);
         new JdkInitializer(List.of(), List.of(), allFiles, classpath, modulePath)
             .withOptions(compilerOptions)
             .withRegistrationFilter(uris::contains)
@@ -390,6 +396,9 @@ public class JdkInitializer
             for (final var cut : compilationUnits) {
                 final var sourceUri = cut.getSourceFile().toUri();
                 final boolean register = registrationFilter == null || registrationFilter.test(sourceUri);
+                if (register) {
+                    processPackageAnnotations(cut);
+                }
                 new TreePathScanner<Void, Void>() {
                     @Override
                     public Void visitClass(final ClassTree classTree, final Void unused) {
@@ -488,6 +497,47 @@ public class JdkInitializer
             }
         }
         return combined;
+    }
+
+    // --- Package processing ---
+
+    /**
+     * Registers a {@link build.codemodel.foundation.descriptor.NamespaceDescriptor} for a
+     * {@code package-info.java} compilation unit and attaches its package-level annotations
+     * (e.g. {@code @Deprecated}, a nullability marker) via the same annotation-resolution
+     * machinery used for type and member annotations.
+     *
+     * <p>Only a compilation unit whose {@code package} declaration actually carries annotations
+     * produces a descriptor; an ordinary source file's bare {@code package} statement is left
+     * alone, so the model is not flooded with empty per-package descriptors.
+     *
+     * <p>The descriptor is created via {@code computeIfAbsent} semantics: if one already exists
+     * for this {@link build.codemodel.foundation.naming.Namespace}, the annotations here are not
+     * re-applied. A {@code rescan} of a {@code package-info.java} evicts the descriptor first
+     * (its {@link SourceLocation.FilePosition} URI matches the rescanned file), so the refreshed
+     * annotations do take effect -- eviction depends on that trait being present, so it is attached
+     * unconditionally, falling back to the compilation unit's extent if the {@code package} tree has
+     * no source position.
+     */
+    private void processPackageAnnotations(final CompilationUnitTree cut) {
+        final PackageTree packageTree = cut.getPackage();
+        if (packageTree == null || packageTree.getAnnotations().isEmpty()) {
+            return;
+        }
+        if (!(trees.getElement(new TreePath(new TreePath(cut), packageTree)) instanceof PackageElement packageElement)) {
+            return;
+        }
+        final var namespace = nameProvider.getNamespace(packageElement.getQualifiedName().toString());
+        if (namespace.isEmpty()) {
+            return;
+        }
+        codeModel.createNamespaceDescriptor(namespace.get(), PolymorphicNamespaceDescriptor::of, descriptor -> {
+            resolver.addTypeAnnotations(descriptor, packageElement);
+            addSourceLocation(cut, packageTree, descriptor);
+            if (descriptor.getTrait(SourceLocation.FilePosition.class).isEmpty()) {
+                addSourceLocation(cut, cut, descriptor);
+            }
+        });
     }
 
     // --- Type processing ---

@@ -320,6 +320,18 @@ public abstract class AbstractCodeModel
         }
     }
 
+    /**
+     * Removes a {@link NamespaceDescriptor} from this model and unindexes it.
+     * Has no effect if the descriptor is not registered.
+     *
+     * @param descriptor the {@link NamespaceDescriptor} to remove
+     */
+    public void removeNamespaceDescriptor(final NamespaceDescriptor descriptor) {
+        if (this.namespaceDescriptors.remove(descriptor.namespace(), descriptor)) {
+            this.index.unindex(descriptor);
+        }
+    }
+
     @Override
     public Stream<TypeDescriptor> typeDescriptors() {
         return this.typeDescriptors.values().stream();
