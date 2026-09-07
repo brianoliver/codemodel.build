@@ -1,9 +1,13 @@
 package build.codemodel.dependency.injection;
 
+import build.codemodel.foundation.usage.AnnotationTypeUsage;
+import build.codemodel.objectoriented.descriptor.Classification;
+import build.codemodel.objectoriented.descriptor.MethodDescriptor;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
 
@@ -140,6 +144,105 @@ class ProvidesResolverTests
         final var service = context.create(GreetingService.class);
 
         assertThat(service.greeting).isEqualTo("Hello from concrete override");
+    }
+
+    /**
+     * {@link InjectionFramework#isProvides} and {@link InjectionFramework#resolveEffectivelyProvides} must
+     * agree, method for method, on what counts as {@link Provides}. A {@code void}-returning
+     * {@code @Provides} method is a provider by neither, even though it carries the annotation.
+     */
+    @Test
+    void shouldExcludeVoidProvidesMethodFromBothProvidesPredicates() {
+        final var framework = createInjectionFramework();
+        final var methods = methodsInHierarchy(framework, VoidProvider.class);
+
+        // the annotated void method is present, so the assertions below are not vacuous
+        assertThat(methods).anyMatch(ProvidesResolverTests::carriesProvidesAnnotation);
+
+        assertProvidesPredicatesAgree(framework, methods);
+        assertThat(methods).noneMatch(md -> framework.isProvides(md, methods));
+        assertThat(framework.resolveEffectivelyProvides(methods)).isEmpty();
+    }
+
+    /**
+     * For an ordinary {@link Provides} method the two predicates agree: {@link InjectionFramework#isProvides}
+     * is {@code true} and the method appears in {@link InjectionFramework#resolveEffectivelyProvides}, while
+     * a plain non-annotated method satisfies neither.
+     */
+    @Test
+    void shouldAgreeOnAnnotatedAndUnannotatedProvidesMethods() {
+        final var framework = createInjectionFramework();
+        final var methods = methodsInHierarchy(framework, GreetingProvider.class);
+
+        final var effectivelyProvides = framework.resolveEffectivelyProvides(methods).toList();
+
+        final var greeting = namedMethod(methods, "greeting");
+        final var notProvides = namedMethod(methods, "notProvides");
+
+        assertThat(framework.isProvides(greeting, methods)).isTrue();
+        assertThat(effectivelyProvides).contains(greeting);
+
+        assertThat(framework.isProvides(notProvides, methods)).isFalse();
+        assertThat(effectivelyProvides).doesNotContain(notProvides);
+
+        assertProvidesPredicatesAgree(framework, methods);
+    }
+
+    /**
+     * A concrete override of an {@code abstract} {@link Provides} method carries no annotation of its own,
+     * yet both {@link InjectionFramework#isProvides} and {@link InjectionFramework#resolveEffectivelyProvides}
+     * must recognize it - consistently.
+     */
+    @Test
+    void shouldRecognizeConcreteOverrideOfAbstractProvidesConsistently() {
+        final var framework = createInjectionFramework();
+        final var methods = methodsInHierarchy(framework, ConcreteGreetingProvider.class);
+
+        final var concreteOverride = methods.stream()
+            .filter(md -> md.methodName().name().toString().equals("greeting"))
+            .filter(md -> md.getTrait(Classification.class)
+                .map(classification -> classification != Classification.ABSTRACT)
+                .orElse(true))
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(carriesProvidesAnnotation(concreteOverride)).isFalse();
+        assertThat(framework.isProvides(concreteOverride, methods)).isTrue();
+        assertThat(framework.resolveEffectivelyProvides(methods)).contains(concreteOverride);
+
+        assertProvidesPredicatesAgree(framework, methods);
+    }
+
+    /**
+     * Asserts that {@link InjectionFramework#isProvides} classifies each method exactly as {@link
+     * InjectionFramework#resolveEffectivelyProvides} does.
+     */
+    private static void assertProvidesPredicatesAgree(
+        final InjectionFramework framework, final List<MethodDescriptor> methods) {
+
+        final var effectivelyProvides = framework.resolveEffectivelyProvides(methods).toList();
+
+        assertThat(methods.stream().filter(md -> framework.isProvides(md, methods)).toList())
+            .containsExactlyInAnyOrderElementsOf(effectivelyProvides);
+    }
+
+    private static List<MethodDescriptor> methodsInHierarchy(final InjectionFramework framework, final Class<?> type) {
+        final var codeModel = framework.codeModel();
+        return codeModel.getJDKTypeDescriptor(type)
+            .map(typeDescriptor -> codeModel.getTraitsInHierarchy(typeDescriptor, MethodDescriptor.class).toList())
+            .orElseThrow();
+    }
+
+    private static MethodDescriptor namedMethod(final List<MethodDescriptor> methods, final String name) {
+        return methods.stream()
+            .filter(md -> md.methodName().name().toString().equals(name))
+            .findFirst()
+            .orElseThrow();
+    }
+
+    private static boolean carriesProvidesAnnotation(final MethodDescriptor descriptor) {
+        return descriptor.traits(AnnotationTypeUsage.class)
+            .anyMatch(annotation -> annotation.typeName().canonicalName().equals(Provides.class.getCanonicalName()));
     }
 
     // --- fixtures ---

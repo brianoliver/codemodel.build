@@ -24,6 +24,7 @@ import build.base.foundation.stream.Streams;
 import build.codemodel.foundation.descriptor.Traitable;
 import build.codemodel.foundation.naming.NonCachingNameProvider;
 import build.codemodel.foundation.usage.AnnotationTypeUsage;
+import build.codemodel.foundation.usage.NamedTypeUsage;
 import build.codemodel.jdk.JDKCodeModel;
 import build.codemodel.jdk.descriptor.FieldType;
 import build.codemodel.jdk.descriptor.JDKType;
@@ -42,6 +43,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -488,25 +490,58 @@ public class InjectionFramework {
     }
 
     /**
-     * Determines if a {@link MethodDescriptor} represents a {@link Provides} method, which means it is
-     * non-{@code static}, non-{@code abstract}, non-{@code void} with an {@link AnnotationTypeUsage} for
-     * {@link Provides}.
+     * Determines if a {@link MethodDescriptor} is an effective {@link Provides} method within the context of
+     * {@code declaredMethods} - typically every {@link MethodDescriptor} in the provider type's hierarchy,
+     * as produced by scanning a {@link JDKTypeDescriptor}.
      *
-     * <p>This is a descriptor-level predicate intended for use when scanning a {@link JDKTypeDescriptor}
-     * to identify provider methods before constructing a {@link ProvidesResolver}. It only recognizes a
-     * method that carries the {@link Provides} annotation itself; it does not recognize a concrete override
-     * of an {@code abstract} {@link Provides} method that omits the annotation. For that, use
-     * {@link #resolveEffectivelyProvides}, which is what {@link ProvidesResolver} uses internally.
+     * <p>A method counts as {@link Provides} if it is non-{@code static}, non-{@code abstract} and
+     * non-{@code void}, and either carries the {@link Provides} annotation itself or overrides an
+     * {@code abstract} method in {@code declaredMethods} that does. An {@code abstract} method has no way to
+     * "opt out" of being overridden - unlike an {@link Inject} method, every concrete subclass is forced to
+     * supply an implementation - so requiring {@link Provides} to be repeated on every concrete override of
+     * an {@code abstract} {@link Provides} method is pure boilerplate, and forgetting to do so would silently
+     * drop the provider rather than report an error.
+     *
+     * <p>This is the single predicate underlying {@link #resolveEffectivelyProvides}, so the two never
+     * disagree on what counts as {@link Provides}.
+     *
+     * @param descriptor      the {@link MethodDescriptor} to test
+     * @param declaredMethods the surrounding {@link MethodDescriptor}s, used to detect an overridden
+     *                        {@code abstract} {@link Provides} declaration
+     * @return {@code true} if {@code descriptor} is an effective {@link Provides} method
+     */
+    public boolean isProvides(final MethodDescriptor descriptor, final Collection<MethodDescriptor> declaredMethods) {
+        return isProvidesShaped(descriptor)
+            && (hasProvidesAnnotation(descriptor)
+                || abstractProvidesOverrideKeys(declaredMethods).contains(descriptor.overrideKey()));
+    }
+
+    /**
+     * Determines if a {@link MethodDescriptor} has the shape of a provider method - non-{@code static},
+     * non-{@code abstract} and non-{@code void} - independent of whether it (or an {@code abstract}
+     * declaration it overrides) carries the {@link Provides} annotation. This is the common structural gate
+     * applied by {@link #isProvides} and {@link #resolveEffectivelyProvides}.
      *
      * @param descriptor the {@link MethodDescriptor}
-     * @return {@code true} if the {@link MethodDescriptor} has a {@link Provides} annotation, {@code false} otherwise
+     * @return {@code true} if the {@link MethodDescriptor} could serve as a provider method
      */
-    public boolean isProvides(final MethodDescriptor descriptor) {
+    private boolean isProvidesShaped(final MethodDescriptor descriptor) {
         return descriptor.getTrait(Static.class).isEmpty()
             && descriptor.getTrait(Classification.class)
             .map(classification -> classification != Classification.ABSTRACT)
             .orElse(true)
-            && hasProvidesAnnotation(descriptor);
+            && !returnsVoid(descriptor);
+    }
+
+    /**
+     * Determines if a {@link MethodDescriptor}'s return type is {@code void}.
+     *
+     * @param descriptor the {@link MethodDescriptor}
+     * @return {@code true} if the method returns {@code void}
+     */
+    private boolean returnsVoid(final MethodDescriptor descriptor) {
+        return descriptor.returnType() instanceof NamedTypeUsage namedTypeUsage
+            && namedTypeUsage.typeName().canonicalName().equals("void");
     }
 
     /**
@@ -525,15 +560,8 @@ public class InjectionFramework {
     }
 
     /**
-     * Determines the non-{@code static}, non-{@code abstract} {@link MethodDescriptor}s within
-     * {@code allMethods} that are effectively {@link Provides} methods - either because they carry the
-     * {@link Provides} annotation themselves, or because they override an {@code abstract} method elsewhere
-     * in {@code allMethods} that does.
-     *
-     * <p>An {@code abstract} method has no way to "opt out" of being overridden - unlike an {@link Inject}
-     * method, every concrete subclass is forced to supply an implementation - so requiring {@link Provides}
-     * to be repeated on every concrete override of an {@code abstract} {@link Provides} method is pure
-     * boilerplate, and forgetting to do so silently drops the provider rather than reporting an error.
+     * Determines the {@link MethodDescriptor}s within {@code allMethods} that are effectively {@link Provides}
+     * methods, per {@link #isProvides(MethodDescriptor, Collection)}.
      *
      * @param allMethods the {@link MethodDescriptor}s to inspect, typically the result of scanning a
      *                   {@link JDKTypeDescriptor}'s hierarchy
@@ -541,20 +569,33 @@ public class InjectionFramework {
      */
     public Stream<MethodDescriptor> resolveEffectivelyProvides(final Collection<MethodDescriptor> allMethods) {
 
-        final var abstractProvidesOverrideKeys = allMethods.stream()
+        // This is the same predicate as isProvides(md, allMethods), inlined so the abstract-override-key
+        // set is computed once for the whole collection rather than once per method.
+        final var abstractProvidesOverrideKeys = abstractProvidesOverrideKeys(allMethods);
+
+        return allMethods.stream()
+            .filter(md -> isProvidesShaped(md)
+                && (hasProvidesAnnotation(md) || abstractProvidesOverrideKeys.contains(md.overrideKey())));
+    }
+
+    /**
+     * Collects the {@link MethodDescriptor#overrideKey() override keys} of the {@code abstract}
+     * {@link Provides}-annotated methods in {@code methods}. A concrete method whose
+     * {@link MethodDescriptor#overrideKey() override key} is in this set overrides an {@code abstract}
+     * {@link Provides} declaration; whether that concrete method is itself an effective {@link Provides}
+     * method is then decided by {@link #isProvidesShaped}, which independently rejects {@code void} returns.
+     *
+     * @param methods the {@link MethodDescriptor}s to inspect
+     * @return the set of overridden {@code abstract} {@link Provides} override keys
+     */
+    private Set<String> abstractProvidesOverrideKeys(final Collection<MethodDescriptor> methods) {
+        return methods.stream()
             .filter(md -> md.getTrait(Classification.class)
                 .map(classification -> classification == Classification.ABSTRACT)
                 .orElse(false))
             .filter(this::hasProvidesAnnotation)
             .map(MethodDescriptor::overrideKey)
             .collect(Collectors.toSet());
-
-        return allMethods.stream()
-            .filter(md -> md.getTrait(Static.class).isEmpty())
-            .filter(md -> md.getTrait(Classification.class)
-                .map(classification -> classification != Classification.ABSTRACT)
-                .orElse(true))
-            .filter(md -> hasProvidesAnnotation(md) || abstractProvidesOverrideKeys.contains(md.overrideKey()));
     }
 
     /**
