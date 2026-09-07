@@ -27,6 +27,7 @@ import build.codemodel.expression.Expression;
 import build.codemodel.expression.Negative;
 import build.codemodel.expression.NumericLiteral;
 import build.codemodel.foundation.descriptor.ThrowableDescriptor;
+import build.codemodel.foundation.usage.IntersectionTypeUsage;
 import build.codemodel.imperative.Return;
 import build.codemodel.jdk.descriptor.EnumConstantDescriptor;
 import build.codemodel.jdk.descriptor.InitializerBlockDescriptor;
@@ -578,6 +579,70 @@ class SourceLocationTests {
 
         final var upperBound = typeVariable.upperBound().orElseThrow();
         assertThat(upperBound.getTrait(SourceLocation.FilePosition.class)).isPresent();
+    }
+
+    @Test
+    void allInterfaceIntersectionTypeParameterBoundsShouldCarryDistinctSourceLocations() {
+        // Every written bound (Comparable, Serializable, Cloneable) must point back at its own
+        // token, not share one position or be skipped entirely.
+        final var src = """
+            package com.example;
+            import java.io.Serializable;
+            public class Box<T extends Comparable<T> & Serializable & Cloneable> {
+            }
+            """;
+
+        final var positionsByToken = intersectionBoundPositions(src, "com.example.Box");
+
+        assertThat(positionsByToken).containsOnlyKeys("Comparable<T>", "Serializable", "Cloneable");
+        assertThat(positionsByToken.get("Comparable<T>"))
+            .isLessThan(positionsByToken.get("Serializable"));
+        assertThat(positionsByToken.get("Serializable"))
+            .isLessThan(positionsByToken.get("Cloneable"));
+    }
+
+    @Test
+    void classLedIntersectionTypeParameterBoundsShouldCarryDistinctSourceLocations() {
+        // When the first bound is a class rather than an interface, the tree bounds and
+        // IntersectionType.getBounds() must still line up so each token keeps its own position.
+        final var src = """
+            package com.example;
+            import java.io.Serializable;
+            public class Box<T extends Number & Comparable<T> & Serializable> {
+            }
+            """;
+
+        final var positionsByToken = intersectionBoundPositions(src, "com.example.Box");
+
+        assertThat(positionsByToken).containsOnlyKeys("Number", "Comparable<T>", "Serializable");
+        assertThat(positionsByToken.get("Number"))
+            .isLessThan(positionsByToken.get("Comparable<T>"));
+        assertThat(positionsByToken.get("Comparable<T>"))
+            .isLessThan(positionsByToken.get("Serializable"));
+    }
+
+    private static HashMap<String, Long> intersectionBoundPositions(final String src,
+                                                                    final String typeName) {
+        final var source = JavaFileObjects.forSourceString(typeName, src);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var descriptor = codeModel.getTypeDescriptor(
+            codeModel.getEmptyModuleTypeName(typeName)).orElseThrow();
+        final var typeVariable = descriptor.getTrait(ParameterizedTypeDescriptor.class)
+            .orElseThrow().typeVariables().findFirst().orElseThrow();
+
+        final var intersection = (IntersectionTypeUsage) typeVariable.upperBound().orElseThrow();
+
+        final var positionsByToken = new HashMap<String, Long>();
+        intersection.types().forEach(bound -> {
+            final var location = bound.getTrait(SourceLocation.FilePosition.class).orElseThrow();
+            positionsByToken.put(
+                src.substring((int) location.startPosition(), (int) location.endPosition()),
+                location.startPosition());
+        });
+        return positionsByToken;
     }
 
     @Test

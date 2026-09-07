@@ -27,6 +27,7 @@ import build.codemodel.foundation.descriptor.Traitable;
 import build.codemodel.foundation.naming.NameProvider;
 import build.codemodel.foundation.naming.TypeName;
 import build.codemodel.foundation.usage.AnnotationTypeUsage;
+import build.codemodel.foundation.usage.IntersectionTypeUsage;
 import build.codemodel.framework.initialization.Initializer;
 import build.codemodel.jdk.JDKCodeModel;
 import build.codemodel.jdk.descriptor.EnumConstantDescriptor;
@@ -609,9 +610,21 @@ public class JdkInitializer
         final var typeVariables = descriptor.get().typeVariables().toList();
         for (int i = 0; i < typeParamTrees.size() && i < typeVariables.size(); i++) {
             final var bounds = typeParamTrees.get(i).getBounds();
+            final var upperBound = typeVariables.get(i).upperBound();
+            if (upperBound.isEmpty()) {
+                continue;
+            }
             if (bounds.size() == 1) {
-                typeVariables.get(i).upperBound()
-                    .ifPresent(upper -> addSourceLocation(cut, bounds.get(0), upper));
+                addSourceLocation(cut, bounds.get(0), upperBound.get());
+            } else if (upperBound.get() instanceof IntersectionTypeUsage intersection) {
+                // An intersection bound (`<T extends A & B>`) resolves to an IntersectionTypeUsage
+                // whose types() come from IntersectionType.getBounds(), which reports exactly the
+                // written bounds in declaration order (the synthetic java.lang.Object that appears
+                // in the mirror's toString() is not included), so they line up with the trees 1:1.
+                final var boundUsages = intersection.types().toList();
+                for (int b = 0; b < bounds.size() && b < boundUsages.size(); b++) {
+                    addSourceLocation(cut, bounds.get(b), boundUsages.get(b));
+                }
             }
         }
     }
