@@ -28,6 +28,7 @@ import build.base.telemetry.foundation.ObservableTelemetryRecorder;
 import build.base.telemetry.javac.MessagerBasedTelemetryRecorder;
 import build.codemodel.dependency.injection.InjectionFramework;
 import build.codemodel.foundation.CodeModel;
+import build.codemodel.foundation.descriptor.PolymorphicNamespaceDescriptor;
 import build.codemodel.foundation.descriptor.TypeDescriptor;
 import build.codemodel.foundation.naming.CachingNameProvider;
 import build.codemodel.foundation.naming.NameProvider;
@@ -84,6 +85,7 @@ import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 
@@ -568,6 +570,8 @@ public class AnnotationProcessor
 
             typeDescriptor.addTrait(SourceLocation.elementRef(typeElement));
 
+            discoverPackageNamespace(codeModel, typeElement);
+
             messager.printNote("Discovered TypeName [" + typeName + "]", typeElement);
 
             // discover the FieldDescriptors, ConstructorDescriptors, and MethodDescriptors, sharing a single
@@ -604,6 +608,34 @@ public class AnnotationProcessor
             e.printStackTrace();
             throw e;
         }
+    }
+
+    /**
+     * Registers a {@link build.codemodel.foundation.descriptor.NamespaceDescriptor} for the package
+     * enclosing a discovered {@link TypeElement} when that package's declaration
+     * ({@code package-info.java}) carries annotations, attaching them via the same
+     * annotation-resolution machinery used for type and member annotations. Mirrors
+     * {@code JdkInitializer.processPackageAnnotations} on the javac-source path.
+     *
+     * <p>Only an annotated package produces a descriptor, so a package with no
+     * {@code package-info.java} (or one without annotations) is left alone. Creation uses
+     * {@code computeIfAbsent} semantics: the annotations are applied once, when the descriptor is
+     * first created for the {@link build.codemodel.foundation.naming.Namespace}.
+     */
+    private void discoverPackageNamespace(final CodeModel codeModel, final TypeElement typeElement) {
+        final PackageElement packageElement = this.processingEnv.getElementUtils().getPackageOf(typeElement);
+        if (packageElement == null || packageElement.getAnnotationMirrors().isEmpty()) {
+            return;
+        }
+        final var namespace = codeModel.getNameProvider()
+            .getNamespace(packageElement.getQualifiedName().toString());
+        if (namespace.isEmpty()) {
+            return;
+        }
+        codeModel.createNamespaceDescriptor(namespace.get(), PolymorphicNamespaceDescriptor::of, descriptor -> {
+            resolver().addTypeAnnotations(descriptor, packageElement);
+            SourceLocation.elementRefOrEmpty(packageElement).ifPresent(descriptor::addTrait);
+        });
     }
 
     /**

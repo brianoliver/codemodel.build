@@ -23,6 +23,7 @@ package build.codemodel.jdk.populator;
 import build.base.compile.testing.JavaFileObjects;
 import build.codemodel.foundation.descriptor.RequiresModuleDescriptor;
 import build.codemodel.foundation.naming.NonCachingNameProvider;
+import build.codemodel.foundation.usage.AnnotationTypeUsage;
 import build.codemodel.foundation.usage.SpecificTypeUsage;
 import build.codemodel.foundation.usage.UnknownTypeUsage;
 import build.codemodel.imperative.Return;
@@ -1076,5 +1077,82 @@ class IncrementalRescanTests {
             .as("Sub's cached field reference must point at `value`'s current position in the "
                 + "rescanned Base.java, not its pre-rescan offset")
             .isEqualTo(freshPosition);
+    }
+
+    // ---------------------------------------------------------------------------
+    // package-info.java — NamespaceDescriptor eviction and refresh
+    // ---------------------------------------------------------------------------
+
+    private static JavaFileObject apiNoteMarker() {
+        return JavaFileObjects.forSourceString("com.example.ApiNote", """
+            package com.example;
+            import java.lang.annotation.*;
+
+            @Target(ElementType.PACKAGE)
+            @Retention(RetentionPolicy.RUNTIME)
+            public @interface ApiNote {}
+            """);
+    }
+
+    /**
+     * A package annotation added in v2 of {@code package-info.java} is visible on the
+     * {@link build.codemodel.foundation.descriptor.NamespaceDescriptor} after rescan — the stale
+     * descriptor is evicted first rather than surviving {@code computeIfAbsent}.
+     */
+    @Test
+    void addedPackageAnnotationIsPresentAfterRescan() {
+        final var v1 = JavaFileObjects.forSourceString("com.example.package-info", """
+            @ApiNote
+            package com.example;
+            """);
+        final var codeModel = populate(apiNoteMarker(), v1);
+
+        final var namespace = codeModel.getNameProvider().getNamespace("com.example").orElseThrow();
+        assertThat(codeModel.getNamespaceDescriptor(namespace).orElseThrow()
+            .traits(AnnotationTypeUsage.class)
+            .map(a -> a.typeName().name().toString())
+            .toList())
+            .containsExactly("ApiNote");
+
+        final var v2 = JavaFileObjects.forSourceString("com.example.package-info", """
+            @ApiNote
+            @Deprecated
+            package com.example;
+            """);
+        JdkInitializer.rescan(codeModel, v2, List.of(apiNoteMarker()), List.of(), List.of(), List.of(), d -> {
+        });
+
+        assertThat(codeModel.getNamespaceDescriptor(namespace).orElseThrow()
+            .traits(AnnotationTypeUsage.class)
+            .map(a -> a.typeName().name().toString())
+            .toList())
+            .as("descriptor must reflect exactly v2's annotations — no stale or duplicated entries")
+            .containsExactlyInAnyOrder("ApiNote", "Deprecated");
+    }
+
+    /**
+     * Removing all annotations from {@code package-info.java} drops the {@code NamespaceDescriptor}
+     * entirely after rescan.
+     */
+    @Test
+    void namespaceDescriptorIsDroppedWhenPackageAnnotationsRemovedOnRescan() {
+        final var v1 = JavaFileObjects.forSourceString("com.example.package-info", """
+            @ApiNote
+            package com.example;
+            """);
+        final var codeModel = populate(apiNoteMarker(), v1);
+
+        final var namespace = codeModel.getNameProvider().getNamespace("com.example").orElseThrow();
+        assertThat(codeModel.getNamespaceDescriptor(namespace)).isPresent();
+
+        final var v2 = JavaFileObjects.forSourceString("com.example.package-info", """
+            package com.example;
+            """);
+        JdkInitializer.rescan(codeModel, v2, List.of(apiNoteMarker()), List.of(), List.of(), List.of(), d -> {
+        });
+
+        assertThat(codeModel.getNamespaceDescriptor(namespace))
+            .as("an annotation-free package-info must leave no NamespaceDescriptor behind")
+            .isEmpty();
     }
 }
