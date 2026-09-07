@@ -32,6 +32,7 @@ import build.codemodel.jdk.descriptor.EnumConstantDescriptor;
 import build.codemodel.jdk.descriptor.InitializerBlockDescriptor;
 import build.codemodel.jdk.descriptor.JDKTypeDescriptor;
 import build.codemodel.jdk.descriptor.MethodBodyDescriptor;
+import build.codemodel.jdk.descriptor.PermitsTypeDescriptor;
 import build.codemodel.jdk.descriptor.RecordComponentDescriptor;
 import build.codemodel.jdk.expression.ArrayAccess;
 import build.codemodel.jdk.expression.ClassLiteral;
@@ -53,6 +54,7 @@ import build.codemodel.objectoriented.descriptor.MethodDescriptor;
 import build.codemodel.objectoriented.descriptor.ParameterizedTypeDescriptor;
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -366,6 +368,39 @@ class SourceLocationTests {
         // extends precedes implements, and each implemented interface is distinct and in source order
         assertThat(serializablePos).isGreaterThan(superPos);
         assertThat(cloneablePos).isGreaterThan(serializablePos);
+    }
+
+    @Test
+    void permitsClauseTypeUsagesShouldCarryDistinctSourceLocations() {
+        // permits order (Zeta, Alpha) deliberately differs from alphabetical, so a test that merely
+        // sorted positions would not tell each usage's location apart from the other's.
+        final var src = """
+            package com.example;
+            public sealed interface Shape permits Zeta, Alpha {}
+            final class Zeta implements Shape {}
+            final class Alpha implements Shape {}
+            """;
+        final var source = JavaFileObjects.forSourceString("com.example.Shape", src);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("com.example.Shape");
+        final var descriptor = codeModel.getTypeDescriptor(typeName).orElseThrow();
+        final var permits = descriptor.traits(PermitsTypeDescriptor.class).toList();
+        assertThat(permits).hasSize(2);
+
+        // Slice the source at each recorded position and key by the token it actually points at.
+        final var positionsByToken = new HashMap<String, Long>();
+        for (final var permit : permits) {
+            final var location = permit.parentTypeUsage()
+                .getTrait(SourceLocation.FilePosition.class).orElseThrow();
+            final var token = src.substring((int) location.startPosition(), (int) location.endPosition());
+            positionsByToken.put(token, location.startPosition());
+        }
+
+        assertThat(positionsByToken).containsOnlyKeys("Zeta", "Alpha");
+        assertThat(positionsByToken.get("Zeta")).isLessThan(positionsByToken.get("Alpha"));
     }
 
     @Test

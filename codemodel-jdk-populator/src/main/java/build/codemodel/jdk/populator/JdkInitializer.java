@@ -37,6 +37,7 @@ import build.codemodel.jdk.descriptor.JDKModuleDescriptor;
 import build.codemodel.jdk.descriptor.JDKTypeDescriptor;
 import build.codemodel.jdk.descriptor.MethodBodyDescriptor;
 import build.codemodel.jdk.descriptor.OpenModule;
+import build.codemodel.jdk.descriptor.PermitsTypeDescriptor;
 import build.codemodel.jdk.descriptor.RecordComponentDescriptor;
 import build.codemodel.jdk.populator.descriptor.SourceLocation;
 import build.codemodel.objectoriented.descriptor.ConstructorDescriptor;
@@ -507,6 +508,7 @@ public class JdkInitializer
             addImports(typeDescriptor, cut);
         }
         addSuperTypeUsageSourceLocations(typeDescriptor, classPath, cut);
+        addPermitsSourceLocations(typeDescriptor, classPath, cut);
         addRecordComponentSourceLocations(typeDescriptor, classPath, cut);
         addTypeParameterBoundSourceLocations(typeDescriptor, ((ClassTree) classPath.getLeaf()).getTypeParameters(), cut);
 
@@ -557,6 +559,17 @@ public class JdkInitializer
         final var interfaceUsages = typeDescriptor.interfaceTypeUsages().toList();
         for (int i = 0; i < implementsClause.size() && i < interfaceUsages.size(); i++) {
             addSourceLocation(cut, implementsClause.get(i), interfaceUsages.get(i));
+        }
+    }
+
+    private void addPermitsSourceLocations(final JDKTypeDescriptor typeDescriptor,
+                                           final TreePath classPath,
+                                           final CompilationUnitTree cut) {
+        final var classTree = (ClassTree) classPath.getLeaf();
+        final var permitsClause = classTree.getPermitsClause();
+        final var permittedUsages = typeDescriptor.traits(PermitsTypeDescriptor.class).toList();
+        for (int i = 0; i < permitsClause.size() && i < permittedUsages.size(); i++) {
+            addSourceLocation(cut, permitsClause.get(i), permittedUsages.get(i).parentTypeUsage());
         }
     }
 
