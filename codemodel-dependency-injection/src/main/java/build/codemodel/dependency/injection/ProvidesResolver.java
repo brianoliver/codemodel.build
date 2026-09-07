@@ -89,8 +89,7 @@ public class ProvidesResolver
 
                 framework.resolveEffectivelyProvides(allMethods)
                     .filter(md -> md.formalParameters().findAny().isEmpty())
-                    .filter(md -> md.returnType() instanceof NamedTypeUsage ntu
-                        && !ntu.typeName().canonicalName().equals("void"))
+                    .filter(md -> md.returnType() instanceof NamedTypeUsage)
                     .forEach(md -> {
                         final var dependency = IndependentDependency.of(md.returnType(), _ -> framework.getQualifierAnnotationTypes(md));
                         this.methodsByDependency.putIfAbsent(dependency, md);
