@@ -23,9 +23,11 @@ package build.codemodel.jdk.populator;
 import build.base.compile.testing.JavaFileObjects;
 import build.codemodel.expression.Cast;
 import build.codemodel.expression.NumericLiteral;
+import build.codemodel.foundation.usage.AnnotationTypeUsage;
 import build.codemodel.foundation.usage.NamedTypeUsage;
 import build.codemodel.imperative.Return;
 import build.codemodel.jdk.descriptor.MethodBodyDescriptor;
+import build.codemodel.jdk.expression.ArrayDimensionOrder;
 import build.codemodel.jdk.expression.AssignmentOperator;
 import build.codemodel.jdk.expression.BitwiseBinary;
 import build.codemodel.jdk.expression.BitwiseOperator;
@@ -51,6 +53,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * Tests for correct capture of source-tree information in {@link JdkExpressionConverter}.
@@ -375,6 +378,245 @@ class ExpressionCaptureFidelityTests {
 
         assertThat(newArray.elementType()).isInstanceOf(NamedTypeUsage.class);
         assertThat(((NamedTypeUsage) newArray.elementType()).typeName().canonicalName()).isEqualTo("java.lang.String");
+    }
+
+    @Test
+    void shouldCapturePerDimensionArrayCreationAnnotations() {
+        final var annotationA = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.DimA", """
+                package build.codemodel.jdk.example;
+                import java.lang.annotation.ElementType;
+                import java.lang.annotation.Target;
+                @Target(ElementType.TYPE_USE)
+                public @interface DimA {
+                }
+                """);
+        final var annotationB = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.DimB", """
+                package build.codemodel.jdk.example;
+                import java.lang.annotation.ElementType;
+                import java.lang.annotation.Target;
+                @Target(ElementType.TYPE_USE)
+                public @interface DimB {
+                }
+                """);
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.DimArrays", """
+                package build.codemodel.jdk.example;
+                public class DimArrays {
+                    public Object create(int n) {
+                        return new int @DimA [n] @DimB [4];
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(annotationA, annotationB, source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.DimArrays");
+        final var newArray = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(NewArray.class)
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(newArray.traits(AnnotationTypeUsage.class))
+            .extracting(
+                usage -> usage.typeName().canonicalName(),
+                usage -> usage.trait(ArrayDimensionOrder.class).dimension())
+            .containsExactlyInAnyOrder(
+                tuple("build.codemodel.jdk.example.DimA", 0),
+                tuple("build.codemodel.jdk.example.DimB", 1));
+        assertThat(newArray.traits(AnnotationTypeUsage.class))
+            .allSatisfy(usage -> assertThat(usage.getTrait(SourceLocation.FilePosition.class))
+                .as("each dimension annotation carries its own source position")
+                .isPresent());
+    }
+
+    @Test
+    void shouldAttachNoAnnotationTypeUsagesToAnUnannotatedArrayCreation() {
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.PlainArrays", """
+                package build.codemodel.jdk.example;
+                public class PlainArrays {
+                    public int[][] create(int n) {
+                        return new int[n][4];
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.PlainArrays");
+        final var newArray = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(NewArray.class)
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(newArray.traits(AnnotationTypeUsage.class)).isEmpty();
+        assertThat(newArray.elementType().traits(AnnotationTypeUsage.class)).isEmpty();
+    }
+
+    @Test
+    void shouldCaptureBaseTypeArrayCreationAnnotation() {
+        final var annotation = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.Base", """
+                package build.codemodel.jdk.example;
+                import java.lang.annotation.ElementType;
+                import java.lang.annotation.Target;
+                @Target(ElementType.TYPE_USE)
+                public @interface Base {
+                }
+                """);
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.BaseArrays", """
+                package build.codemodel.jdk.example;
+                public class BaseArrays {
+                    public Object create(int n) {
+                        return new @Base int[n];
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(annotation, source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.BaseArrays");
+        final var newArray = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(NewArray.class)
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(newArray.elementType().traits(AnnotationTypeUsage.class))
+            .singleElement()
+            .satisfies(usage ->
+                assertThat(usage.typeName().canonicalName()).isEqualTo("build.codemodel.jdk.example.Base"));
+    }
+
+    @Test
+    void shouldCaptureMultipleAnnotationsOnASingleArrayDimension() {
+        final var annotationA = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.DimA", """
+                package build.codemodel.jdk.example;
+                import java.lang.annotation.ElementType;
+                import java.lang.annotation.Target;
+                @Target(ElementType.TYPE_USE)
+                public @interface DimA {
+                }
+                """);
+        final var annotationB = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.DimB", """
+                package build.codemodel.jdk.example;
+                import java.lang.annotation.ElementType;
+                import java.lang.annotation.Target;
+                @Target(ElementType.TYPE_USE)
+                public @interface DimB {
+                }
+                """);
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.MultiDimAnno", """
+                package build.codemodel.jdk.example;
+                public class MultiDimAnno {
+                    public Object create(int n) {
+                        return new int @DimA @DimB [n];
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(annotationA, annotationB, source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.MultiDimAnno");
+        final var newArray = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(NewArray.class)
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(newArray.traits(AnnotationTypeUsage.class))
+            .extracting(
+                usage -> usage.typeName().canonicalName(),
+                usage -> usage.trait(ArrayDimensionOrder.class).dimension())
+            .containsExactlyInAnyOrder(
+                tuple("build.codemodel.jdk.example.DimA", 0),
+                tuple("build.codemodel.jdk.example.DimB", 0));
+    }
+
+    @Test
+    void shouldCaptureAnnotationOnATrailingArrayDimensionBracket() {
+        final var annotation = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.DimB", """
+                package build.codemodel.jdk.example;
+                import java.lang.annotation.ElementType;
+                import java.lang.annotation.Target;
+                @Target(ElementType.TYPE_USE)
+                public @interface DimB {
+                }
+                """);
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.TrailingDimAnno", """
+                package build.codemodel.jdk.example;
+                public class TrailingDimAnno {
+                    public Object create(int n) {
+                        return new int[n] @DimB [];
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(annotation, source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.TrailingDimAnno");
+        final var newArray = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(NewArray.class)
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(newArray.traits(AnnotationTypeUsage.class))
+            .extracting(
+                usage -> usage.typeName().canonicalName(),
+                usage -> usage.trait(ArrayDimensionOrder.class).dimension())
+            .containsExactly(tuple("build.codemodel.jdk.example.DimB", 1));
+    }
+
+    @Test
+    void shouldCaptureABracketAnnotationOnAnArrayCreationWithInitializerAsABaseTypeAnnotation() {
+        final var annotation = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.DimA", """
+                package build.codemodel.jdk.example;
+                import java.lang.annotation.ElementType;
+                import java.lang.annotation.Target;
+                @Target(ElementType.TYPE_USE)
+                public @interface DimA {
+                }
+                """);
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.InitializerDimAnno", """
+                package build.codemodel.jdk.example;
+                public class InitializerDimAnno {
+                    public Object create() {
+                        return new int @DimA [] {1, 2, 3};
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(annotation, source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.InitializerDimAnno");
+        final var newArray = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(NewArray.class)
+            .findFirst()
+            .orElseThrow();
+
+        // With an array initializer there is no dimension expression, and javac's parser folds a
+        // bracket-position annotation into NewArrayTree.getAnnotations() — the same slot as a genuine
+        // base-type annotation (`new @DimA int[]{…}`), with no way to tell them apart. So it lands on
+        // the element type, not as an ArrayDimensionOrder-tagged dimension annotation.
+        assertThat(newArray.traits(AnnotationTypeUsage.class)).isEmpty();
+        assertThat(newArray.elementType().traits(AnnotationTypeUsage.class))
+            .singleElement()
+            .satisfies(usage ->
+                assertThat(usage.typeName().canonicalName()).isEqualTo("build.codemodel.jdk.example.DimA"));
     }
 
     @Test
