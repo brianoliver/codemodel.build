@@ -79,7 +79,7 @@ class MereologyTests {
     @Test
     void recordComponentDescriptorPartsContainsType() {
         final var type = codeModel.getTypeUsage(String.class);
-        final var descriptor = RecordComponentDescriptor.of(IrreducibleName.of("value"), type);
+        final var descriptor = RecordComponentDescriptor.of(codeModel, IrreducibleName.of("value"), type);
         assertThat(descriptor.parts().toList()).containsExactly(type);
     }
 

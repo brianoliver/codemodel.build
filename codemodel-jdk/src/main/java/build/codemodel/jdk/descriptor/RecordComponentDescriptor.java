@@ -20,24 +20,41 @@ package build.codemodel.jdk.descriptor;
  * #L%
  */
 
-import build.base.foundation.iterator.Iterators;
+import build.base.marshalling.Bound;
+import build.base.marshalling.Marshal;
+import build.base.marshalling.Marshalled;
+import build.base.marshalling.Marshaller;
+import build.base.marshalling.Marshalling;
+import build.base.marshalling.Out;
+import build.base.marshalling.Unmarshal;
 import build.base.mereology.Composite;
+import build.codemodel.foundation.CodeModel;
+import build.codemodel.foundation.descriptor.AbstractTraitable;
 import build.codemodel.foundation.descriptor.NonSingular;
 import build.codemodel.foundation.descriptor.Trait;
+import build.codemodel.foundation.descriptor.Traitable;
 import build.codemodel.foundation.naming.IrreducibleName;
 import build.codemodel.foundation.usage.TypeUsage;
 
-import java.util.Iterator;
+import java.lang.invoke.MethodHandles;
 import java.util.Objects;
+import java.util.stream.Stream;
 
 /**
  * A {@link Trait} representing a record component on a record type descriptor.
+ *
+ * <p>Being a {@link Traitable}, a {@link RecordComponentDescriptor} can carry its own traits -
+ * notably the {@code AnnotationTypeUsage}s for annotations whose {@code @Target} is exactly
+ * {@code RECORD_COMPONENT}, which per JLS 9.7.4 propagate only to the record component and not to
+ * the backing field, constructor parameter, or accessor method.
  *
  * @author reed.vonredwitz
  * @since Mar-2026
  */
 @NonSingular
-public final class RecordComponentDescriptor implements Composite, Trait {
+public final class RecordComponentDescriptor
+    extends AbstractTraitable
+    implements Trait, Traitable {
 
     /**
      * The {@link IrreducibleName} of the record component.
@@ -49,9 +66,50 @@ public final class RecordComponentDescriptor implements Composite, Trait {
      */
     private final TypeUsage type;
 
-    private RecordComponentDescriptor(final IrreducibleName name, final TypeUsage type) {
+    private RecordComponentDescriptor(final CodeModel codeModel, final IrreducibleName name, final TypeUsage type) {
+        super(codeModel);
         this.name = Objects.requireNonNull(name, "The name must not be null");
         this.type = Objects.requireNonNull(type, "The type must not be null");
+    }
+
+    /**
+     * {@link Unmarshal} a {@link RecordComponentDescriptor}.
+     *
+     * @param codeModel  the {@link CodeModel}
+     * @param marshaller the {@link Marshaller} for unmarshalling the {@link Marshalled} {@link Trait}s
+     * @param traits     the {@link Marshalled} {@link Trait}s
+     * @param name       the {@link IrreducibleName} of the record component
+     * @param type       the declared {@link TypeUsage} of the record component
+     */
+    @Unmarshal
+    public RecordComponentDescriptor(@Bound final CodeModel codeModel,
+                                     final Marshaller marshaller,
+                                     final Stream<Marshalled<Trait>> traits,
+                                     final IrreducibleName name,
+                                     final TypeUsage type) {
+
+        super(codeModel, marshaller, traits);
+        this.name = name;
+        this.type = type;
+    }
+
+    /**
+     * {@link Marshal} a {@link RecordComponentDescriptor}.
+     *
+     * @param marshaller the {@link Marshaller}
+     * @param traits     the {@link Marshalled} {@link Trait}s
+     * @param name       the {@link IrreducibleName} of the record component
+     * @param type       the declared {@link TypeUsage} of the record component
+     */
+    @Marshal
+    public void destructor(final Marshaller marshaller,
+                           final Out<Stream<Marshalled<Trait>>> traits,
+                           final Out<IrreducibleName> name,
+                           final Out<TypeUsage> type) {
+
+        super.destructor(marshaller, traits);
+        name.set(this.name);
+        type.set(this.type);
     }
 
     /**
@@ -72,22 +130,46 @@ public final class RecordComponentDescriptor implements Composite, Trait {
         return this.type;
     }
 
+    @Override
+    protected Stream<? extends Composite> compositeChildren() {
+        return Stream.of(this.type);
+    }
 
     @Override
-    public <T> Iterator<T> iterator(final Class<T> type) {
-        return type.isInstance(this.type)
-            ? Iterators.of(type.cast(this.type))
-            : Iterators.empty();
+    public boolean equals(final Object object) {
+        if (this == object) {
+            return true;
+        }
+        if (object == null || getClass() != object.getClass()) {
+            return false;
+        }
+        return object instanceof RecordComponentDescriptor other
+            && Objects.equals(this.name, other.name)
+            && Objects.equals(this.type, other.type)
+            && super.equals(other);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(this.name, this.type, super.hashCode());
     }
 
     /**
      * Creates a {@link RecordComponentDescriptor}.
      *
-     * @param name the {@link IrreducibleName} of the record component
-     * @param type the declared {@link TypeUsage} of the record component
+     * @param codeModel the {@link CodeModel}
+     * @param name      the {@link IrreducibleName} of the record component
+     * @param type      the declared {@link TypeUsage} of the record component
      * @return a new {@link RecordComponentDescriptor}
      */
-    public static RecordComponentDescriptor of(final IrreducibleName name, final TypeUsage type) {
-        return new RecordComponentDescriptor(name, type);
+    public static RecordComponentDescriptor of(final CodeModel codeModel,
+                                               final IrreducibleName name,
+                                               final TypeUsage type) {
+
+        return new RecordComponentDescriptor(codeModel, name, type);
+    }
+
+    static {
+        Marshalling.register(RecordComponentDescriptor.class, MethodHandles.lookup());
     }
 }

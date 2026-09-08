@@ -27,6 +27,7 @@ import build.codemodel.jdk.descriptor.Varargs;
 import build.codemodel.jdk.example.AbstractPerson;
 import build.codemodel.jdk.example.AnnotatedGenericContainer;
 import build.codemodel.jdk.example.AnnotatedReceiverExample;
+import build.codemodel.jdk.example.AnnotatedRecordExample;
 import build.codemodel.jdk.example.AnnotatedTypeParameterExample;
 import build.codemodel.jdk.example.BoundedContainer;
 import build.codemodel.jdk.example.ColorExample;
@@ -814,6 +815,25 @@ class JDKCodeModelTests {
             .findFirst().orElseThrow();
         assertThat(((NamedTypeUsage) xComponent.type()).typeName().canonicalName())
             .isEqualTo("int");
+    }
+
+    @Test
+    void shouldCaptureRecordComponentOnlyAnnotationViaReflection() {
+        final var codeModel = createCodeModel();
+        final var descriptor = codeModel.getJDKTypeDescriptor(AnnotatedRecordExample.class).orElseThrow();
+
+        final var components = descriptor.traits(RecordComponentDescriptor.class).toList();
+        final var xComponent = components.stream()
+            .filter(c -> c.name().toString().equals("x"))
+            .findFirst().orElseThrow();
+        final var yComponent = components.stream()
+            .filter(c -> c.name().toString().equals("y"))
+            .findFirst().orElseThrow();
+
+        assertThat(xComponent.traits(AnnotationTypeUsage.class).map(a -> a.typeName().name().toString()))
+            .as("a @Target(RECORD_COMPONENT)-only annotation is representable only on the component")
+            .containsExactly("RecordComponentOnly");
+        assertThat(yComponent.traits(AnnotationTypeUsage.class)).isEmpty();
     }
 
     @Test
