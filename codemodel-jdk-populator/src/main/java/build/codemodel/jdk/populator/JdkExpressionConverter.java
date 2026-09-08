@@ -45,12 +45,14 @@ import build.codemodel.foundation.CodeModel;
 import build.codemodel.foundation.descriptor.CallableDescriptor;
 import build.codemodel.foundation.naming.TypeName;
 import build.codemodel.foundation.usage.AnnotationTypeUsage;
+import build.codemodel.foundation.usage.AnnotationValue;
 import build.codemodel.foundation.usage.NamedTypeUsage;
 import build.codemodel.foundation.usage.TypeUsage;
 import build.codemodel.foundation.usage.UnknownTypeUsage;
 import build.codemodel.imperative.Block;
 import build.codemodel.imperative.Statement;
 import build.codemodel.jdk.expression.ArrayAccess;
+import build.codemodel.jdk.expression.ArrayDimensionOrder;
 import build.codemodel.jdk.expression.AssignmentOperator;
 import build.codemodel.jdk.expression.BitwiseBinary;
 import build.codemodel.jdk.expression.BitwiseOperator;
@@ -84,7 +86,10 @@ import build.codemodel.jdk.statement.ExpressionStatement;
 import build.codemodel.jdk.statement.LocalVariableDeclaration;
 import build.codemodel.objectoriented.descriptor.ConstructorDescriptor;
 import build.codemodel.objectoriented.descriptor.MethodDescriptor;
+import com.sun.source.tree.AnnotatedTypeTree;
+import com.sun.source.tree.AnnotationTree;
 import com.sun.source.tree.ArrayAccessTree;
+import com.sun.source.tree.ArrayTypeTree;
 import com.sun.source.tree.AssignmentTree;
 import com.sun.source.tree.BinaryTree;
 import com.sun.source.tree.BindingPatternTree;
@@ -123,11 +128,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.stream.Stream;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.tools.Diagnostic;
@@ -776,7 +783,86 @@ public class JdkExpressionConverter
         addSourceLocation(t.getType()).ifPresent(type::addTrait);
         final var newArray = NewArray.of(codeModel, type, dims.stream(), initializers.stream());
         addSourceLocation(t).ifPresent(newArray::addTrait);
+        // Type-use annotations on an array creation live only on the NewArrayTree (never on any
+        // TypeMirror). Base-type annotations (`new @Foo int[3]`) belong on the element type; each
+        // dimension-bracket annotation (`new int[3] @Bar [4]`) goes on the NewArray node tagged
+        // with its bracket index via ArrayDimensionOrder, since there is no per-bracket TypeUsage.
+        resolveArrayAnnotations(t.getAnnotations()).forEach(type::addTrait);
+        final var dimAnnotationTrees = t.getDimAnnotations();
+        for (int dimension = 0; dimension < dimAnnotationTrees.size(); dimension++) {
+            addDimensionAnnotations(newArray, dimension, dimAnnotationTrees.get(dimension));
+        }
+        addTypeTreeDimensionAnnotations(newArray, t.getType(), dims.size());
         return newArray;
+    }
+
+    /**
+     * Attaches each resolved dimension-bracket annotation to {@code newArray} tagged with an
+     * {@link ArrayDimensionOrder} for the given bracket index.
+     */
+    private void addDimensionAnnotations(final NewArray newArray,
+                                         final int dimension,
+                                         final List<? extends AnnotationTree> annotationTrees) {
+        for (final var usage : resolveArrayAnnotations(annotationTrees)) {
+            usage.addTrait(new ArrayDimensionOrder(dimension));
+            newArray.addTrait(usage);
+        }
+    }
+
+    /**
+     * Recovers dimension-bracket annotations that javac parses onto the {@link NewArrayTree}'s type
+     * tree rather than into {@link NewArrayTree#getDimAnnotations()} — those written on a bracket
+     * pair with no dimension expression, i.e. the trailing {@code []} in {@code new int[n] @Foo []}.
+     * Each nested {@link ArrayTypeTree} level of {@code typeTree}, outermost first, is one further
+     * dimension bracket after the {@code dimensionCount} brackets that did carry an expression, so it
+     * maps to {@link ArrayDimensionOrder} {@code dimensionCount}, {@code dimensionCount + 1}, ….
+     */
+    private void addTypeTreeDimensionAnnotations(final NewArray newArray,
+                                                 final Tree typeTree,
+                                                 final int dimensionCount) {
+        var current = typeTree;
+        var dimension = dimensionCount;
+        while (current != null) {
+            List<? extends AnnotationTree> annotations = List.of();
+            if (current instanceof AnnotatedTypeTree annotated) {
+                annotations = annotated.getAnnotations();
+                current = annotated.getUnderlyingType();
+            }
+            if (!(current instanceof ArrayTypeTree arrayType)) {
+                // Reached the element type; any annotations here are base-type annotations already
+                // captured via NewArrayTree.getAnnotations().
+                break;
+            }
+            addDimensionAnnotations(newArray, dimension, annotations);
+            dimension++;
+            current = arrayType.getType();
+        }
+    }
+
+    /**
+     * Resolves the given array-creation {@link AnnotationTree}s (base-type or per-dimension) to
+     * {@link AnnotationTypeUsage}s. javac exposes these only as trees — never as an
+     * {@link AnnotationMirror} on an {@link javax.lang.model.element.Element} or {@link TypeMirror} —
+     * so only the annotation <em>type</em> is recovered here; argument values are not yet captured
+     * (matching the {@code module-info} tree-path limitation). Each usage carries its own
+     * {@link SourceLocation.FilePosition}.
+     */
+    private List<AnnotationTypeUsage> resolveArrayAnnotations(final List<? extends AnnotationTree> annotationTrees) {
+        if (annotationTrees.isEmpty()) {
+            return List.of();
+        }
+        return annotationTrees.stream()
+            .flatMap(annotationTree -> resolveTypeMirror(annotationTree.getAnnotationType())
+                .filter(mirror -> mirror.getKind() == TypeKind.DECLARED)
+                .map(mirror -> (TypeElement) ((DeclaredType) mirror).asElement())
+                .map(typeElement -> {
+                    final var usage = AnnotationTypeUsage.of(
+                        codeModel, typeNameResolver.apply(typeElement), Stream.<AnnotationValue>empty());
+                    addSourceLocation(annotationTree).ifPresent(usage::addTrait);
+                    return usage;
+                })
+                .stream())
+            .toList();
     }
 
     @Override
