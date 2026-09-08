@@ -664,7 +664,12 @@ public final class TypeMirrorResolver {
         for (final RecordComponentElement component : typeElement.getRecordComponents()) {
             final var name = nameProvider.getIrreducibleName(component.getSimpleName());
             final var type = this.resolve(component.asType(), component);
-            typeDescriptor.addTrait(RecordComponentDescriptor.of(name, type));
+            final var recordComponent = RecordComponentDescriptor.of(codeModel, name, type);
+            // Annotations whose @Target is exactly RECORD_COMPONENT (JLS 9.7.4) land only on the
+            // component element - the backing field / parameter / accessor never see them - so the
+            // RecordComponentDescriptor is the only place they can be represented.
+            this.addTypeAnnotations(recordComponent, component);
+            typeDescriptor.addTrait(recordComponent);
         }
     }
 

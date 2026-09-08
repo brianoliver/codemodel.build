@@ -25,6 +25,7 @@ import build.codemodel.foundation.usage.AnnotationTypeUsage;
 import build.codemodel.jdk.descriptor.MemberTypeDescriptor;
 import build.codemodel.jdk.descriptor.MethodBodyDescriptor;
 import build.codemodel.jdk.descriptor.ReceiverAnnotation;
+import build.codemodel.jdk.descriptor.RecordComponentDescriptor;
 import build.codemodel.jdk.expression.Lambda;
 import build.codemodel.jdk.statement.CatchClause;
 import build.codemodel.jdk.statement.EnhancedFor;
@@ -272,5 +273,40 @@ class AnnotationCaptureGapsTests {
             .map(a -> a.typeName().name().toString())
             .toList();
         assertThat(annotations).containsExactly("Local");
+    }
+
+    @Test
+    void shouldCaptureRecordComponentOnlyAnnotation() {
+        final var source = JavaFileObjects.forSourceString("build.codemodel.jdk.example.Point", """
+            package build.codemodel.jdk.example;
+            import java.lang.annotation.*;
+
+            @Target(ElementType.RECORD_COMPONENT)
+            @interface OnlyComponent {}
+
+            public record Point(@OnlyComponent int x, int y) {
+            }
+            """);
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.Point");
+        final var components = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .traits(RecordComponentDescriptor.class)
+            .toList();
+        assertThat(components).hasSize(2);
+
+        final var x = components.stream()
+            .filter(c -> c.name().toString().equals("x"))
+            .findFirst().orElseThrow();
+        final var y = components.stream()
+            .filter(c -> c.name().toString().equals("y"))
+            .findFirst().orElseThrow();
+
+        assertThat(x.traits(AnnotationTypeUsage.class)
+            .map(a -> a.typeName().name().toString())
+            .toList())
+            .containsExactly("OnlyComponent");
+        assertThat(y.traits(AnnotationTypeUsage.class).toList()).isEmpty();
     }
 }

@@ -635,7 +635,11 @@ public class JDKCodeModel
                 .forEach(component -> {
                     final var name = getNameProvider().getIrreducibleName(component.getName());
                     final var componentType = getStructuralTypeUsage(component.getAnnotatedType());
-                    typeDescriptor.addTrait(RecordComponentDescriptor.of(name, componentType));
+                    final var recordComponent = RecordComponentDescriptor.of(this, name, componentType);
+                    // @Target(RECORD_COMPONENT)-only annotations (JLS 9.7.4) are carried by the
+                    // component alone, so they can only be represented on the descriptor itself.
+                    getAnnotations(component).forEach(recordComponent::addTrait);
+                    typeDescriptor.addTrait(recordComponent);
                 });
         }
 
