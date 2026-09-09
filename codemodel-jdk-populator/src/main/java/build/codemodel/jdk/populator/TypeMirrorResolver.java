@@ -784,7 +784,7 @@ public final class TypeMirrorResolver {
 
     private TypeVariableUsage resolveTypeParameter(final TypeParameterElement tp,
                                                    final Element enclosingElement) {
-        final var name = nameProvider.getTypeName(tp.getSimpleName().toString());
+        final var typeVariableName = resolveTypeVariableTypeName(tp);
         final var typeVar = (TypeVariable) tp.asType();
 
         // Upper bound: skip the implicit java.lang.Object (every type parameter extends it)
@@ -799,7 +799,7 @@ public final class TypeMirrorResolver {
         }
 
         // Type parameters never have lower bounds (only wildcards do)
-        final var typeVariableUsage = TypeVariableUsage.of(codeModel, name, Optional.empty(), optUpper);
+        final var typeVariableUsage = TypeVariableUsage.of(codeModel, typeVariableName, Optional.empty(), optUpper);
         createAnnotationTypeUsages(tp, tp.getAnnotationMirrors())
             .forEach(typeVariableUsage::addTrait);
         return typeVariableUsage;

@@ -224,8 +224,14 @@ public class GenericsDiscoveryTests {
 
         assertThat(convertMethod.getTrait(ParameterizedTypeDescriptor.class)).isPresent();
         final var parameterized = convertMethod.getTrait(ParameterizedTypeDescriptor.class).orElseThrow();
+        // The method type parameter <T> is scoped under its enclosing class (empty module, no
+        // namespace) so it can't collide with a T declared elsewhere.
         assertThat(parameterized.typeVariables()
             .map(tv -> tv.typeName().toString())
+            .toList())
+            .containsExactly("Discoverable$T");
+        assertThat(parameterized.typeVariables()
+            .map(tv -> tv.typeName().name().toString())
             .toList())
             .containsExactly("T");
     }

@@ -161,36 +161,69 @@ public class TypeVariableUsage
             return true;
         }
         return object instanceof TypeVariableUsage other
-            && Objects.equals(lowerBound().map(TypeUsage::canonicalName), other.lowerBound().map(TypeUsage::canonicalName))
-            && Objects.equals(upperBound().map(TypeUsage::canonicalName), other.upperBound().map(TypeUsage::canonicalName))
+            && Objects.equals(lowerBound().map(TypeVariableUsage::boundIdentity),
+                              other.lowerBound().map(TypeVariableUsage::boundIdentity))
+            && Objects.equals(upperBound().map(TypeVariableUsage::boundIdentity),
+                              other.upperBound().map(TypeVariableUsage::boundIdentity))
             && super.equals(other);
     }
 
     @Override
     protected String render(final Function<TypeName, String> nameRenderer,
                             final Function<TypeUsage, String> usageRenderer) {
-        return nameRenderer.apply(typeName())
+        // Render the type variable as its own simple name (e.g. "T"), never the enclosing-type-scoped
+        // model form (toString "Foo$T", canonicalName "Foo.T") that distinguishes it from a same-named
+        // variable declared elsewhere: a declaration and every back-reference to it from within a bound
+        // must read as the same source identifier. renderBound applies the same rule to any
+        // TypeVariableUsage nested inside a bound; boundIdentity deliberately does not, since equals
+        // still needs to tell those same-named variables apart.
+        return typeName().name().toString()
             + upperBound().map(b -> " extends " + renderBound(b, nameRenderer, usageRenderer)).orElse("")
             + lowerBound().map(b -> " super " + renderBound(b, nameRenderer, usageRenderer)).orElse("");
     }
 
     /**
-     * Renders a bound, short-circuiting any nested {@link TypeVariableUsage} to just its name rather than
-     * recursing into its own bound. Without this, a self-referential bound (e.g. {@code T extends
-     * Comparable<T>}, or the same shape nested inside a {@link UnionTypeUsage}/{@link IntersectionTypeUsage}
-     * such as {@code T extends Number & Comparable<T>}) would recurse forever: {@code T}'s bound contains
-     * {@code T} again, however deeply it's nested inside other {@link AbstractTypeUsage} containers, so this
-     * guard must be threaded through every level of that nesting - not just the immediate bound - by having
-     * every recursive step re-enter {@code renderBound} rather than falling back to the plain {@code
-     * usageRenderer}.
+     * Renders a type variable's bound. Two concerns are handled here:
+     * <ul>
+     *   <li>A nested {@link TypeVariableUsage} renders as its bare simple name - matching
+     *       {@link #render}, not its enclosing-type-scoped {@link TypeName} - so a self-reference such
+     *       as the inner {@code T} in {@code T extends Comparable<T>} reads as {@code T}.</li>
+     *   <li>That nested {@link TypeVariableUsage} is rendered <em>without</em> descending into its own
+     *       bound. Otherwise a self-referential bound would recurse forever: {@code T}'s bound contains
+     *       {@code T} again, however deeply nested inside other {@link AbstractTypeUsage} containers
+     *       (e.g. the {@link UnionTypeUsage}/{@link IntersectionTypeUsage} of {@code T extends Number &
+     *       Comparable<T>}). The guard has to be threaded through every level of that nesting - not
+     *       just the immediate bound - so every recursive step re-enters {@code renderBound} rather
+     *       than falling back to the plain {@code usageRenderer}.</li>
+     * </ul>
      */
-    private static String renderBound(final TypeUsage b,
+    private static String renderBound(final TypeUsage bound,
                                       final Function<TypeName, String> nameRenderer,
                                       final Function<TypeUsage, String> usageRenderer) {
-        return switch (b) {
-            case TypeVariableUsage tvu -> nameRenderer.apply(tvu.typeName());
-            case AbstractTypeUsage atu -> atu.render(nameRenderer, u -> renderBound(u, nameRenderer, usageRenderer));
-            default -> usageRenderer.apply(b);
+        return switch (bound) {
+            case TypeVariableUsage typeVariableUsage -> typeVariableUsage.typeName().name().toString();
+            case AbstractTypeUsage abstractTypeUsage ->
+                abstractTypeUsage.render(nameRenderer, usage -> renderBound(usage, nameRenderer, usageRenderer));
+            default -> usageRenderer.apply(bound);
+        };
+    }
+
+    /**
+     * A recursion-safe structural key for a bound, used only by {@link #equals}. It mirrors
+     * {@link #renderBound}'s traversal - including its refusal to descend into a nested
+     * {@link TypeVariableUsage}'s own bound, which is what stops a self-referential bound from
+     * recursing forever - but, unlike {@link #renderBound}, keeps a nested type variable's
+     * enclosing-type-scoped {@link TypeName#canonicalName()} instead of reducing it to a bare simple
+     * name. Two bounds that reference same-named type variables declared on different types (e.g.
+     * {@code Comparable<T>} where one {@code T} is declared on {@code Foo} and the other on {@code
+     * Bar}) must not compare equal merely because both render for display as {@code Comparable<T>}.
+     */
+    private static String boundIdentity(final TypeUsage bound) {
+        return switch (bound) {
+            case TypeVariableUsage typeVariableUsage -> typeVariableUsage.typeName().canonicalName();
+            case AbstractTypeUsage abstractTypeUsage ->
+                abstractTypeUsage.render(TypeName::canonicalName, TypeVariableUsage::boundIdentity);
+            default -> bound.canonicalName();
         };
     }
 
