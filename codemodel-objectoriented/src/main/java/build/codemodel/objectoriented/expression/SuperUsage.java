@@ -1,4 +1,4 @@
-package build.codemodel.objectoriented.descriptor;
+package build.codemodel.objectoriented.expression;
 
 /*-
  * #%L

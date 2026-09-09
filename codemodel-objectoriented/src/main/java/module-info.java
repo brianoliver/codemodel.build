@@ -36,5 +36,6 @@ open module build.codemodel.objectoriented {
 
     exports build.codemodel.objectoriented;
     exports build.codemodel.objectoriented.descriptor;
+    exports build.codemodel.objectoriented.expression;
     exports build.codemodel.objectoriented.naming;
 }
