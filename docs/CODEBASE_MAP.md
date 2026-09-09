@@ -253,7 +253,7 @@ Expression  (interface, type())
     ├── FunctionUsage                        (type() = empty)
     ├── Cast                                 (type() = targetType)
     ├── TemplateExpression                   (type() = String)
-    ├── MethodUsage / ThisUsage / SuperUsage *** defined in codemodel-objectoriented ***
+    ├── MethodUsage / ThisUsage / SuperUsage *** defined in codemodel-objectoriented (build.codemodel.objectoriented.expression) ***
     ├── AbstractArithmeticExpression  (implements ArithmeticExpression; type() from stored Optional<TypeUsage>)
     │   ├── AbstractBinaryArithmeticExpression   (left()/right())
     │   │   ├── Addition, Subtraction, Multiplication, Division, Modulo, Exponent
@@ -381,8 +381,8 @@ Marker interfaces (`ArithmeticExpression`, `BinaryArithmeticExpression`, `UnaryA
 | `ExtendsTypeDescriptor` | `@Singular extends AbstractParentTypeDescriptor` — single superclass; `of(NamedTypeUsage)`. |
 | `ImplementsTypeDescriptor` | `@NonSingular extends AbstractParentTypeDescriptor` — one per implemented interface. |
 | `ParameterizedTypeDescriptor` | `@Singular` `Trait` + `Traitable`; `Stream<TypeVariableUsage> typeVariables()` — the generic type parameters of a type. |
-| `MethodUsage` | `Expression` node (`extends AbstractExpression`): receiver `Expression` + `MethodName` + arg `Expression`s; `of(Expression receiver, MethodName, Stream<Expression>|Expression...)`. **Filed under `.descriptor` but is an expression node.** |
-| `ThisUsage` / `SuperUsage` | `Expression` nodes for `this` / `super`; `of(CodeModel)`. Also filed under `.descriptor`. |
+| `expression/MethodUsage` | `Expression` node (`extends AbstractExpression`): receiver `Expression` + `MethodName` + arg `Expression`s; `of(Expression receiver, MethodName, Stream<Expression>|Expression...)`. In `build.codemodel.objectoriented.expression`. |
+| `expression/ThisUsage` / `expression/SuperUsage` | `Expression` nodes for `this` / `super`; `of(CodeModel)`. In `build.codemodel.objectoriented.expression`. |
 | `naming/MethodName` | `extends AbstractCallableName` (like `FunctionName`); `of(Optional<ModuleName>, Optional<Namespace>, Optional<TypeName>, IrreducibleName)`. |
 
 **`MethodDescriptor.signature()` vs `overrideKey()` (#134):** #134 split the single old `signature()` into two:
@@ -402,7 +402,7 @@ Marker interfaces (`ArithmeticExpression`, `BinaryArithmeticExpression`, `UnaryA
 - Trait cardinality: `ExtendsTypeDescriptor`, `Classification`, `AccessModifier`, `ParameterizedTypeDescriptor`, `DeclarationOrder` are `@Singular`; `FieldDescriptor`, `MethodDescriptor`, `ConstructorDescriptor`, `ImplementsTypeDescriptor` are `@NonSingular`.
 - `signature()` is **not unique** — use `overrideKey()` for identity/override logic. `overrideKey()`'s prefix depends on the `AccessModifier` trait being present.
 - `MethodDescriptor` / `ConstructorDescriptor` hold their declaring `TypeDescriptor` as `@Bound` (not marshalled) — a detached descriptor cannot unmarshal without its type context (#121). Real code always does `typeDescriptor.addTrait(MethodDescriptor.of(typeDescriptor, …))`.
-- `MethodUsage`/`ThisUsage`/`SuperUsage` are `Expression`s misfiled in `.descriptor`.
+- `MethodUsage`/`ThisUsage`/`SuperUsage` are `Expression`s living in `.expression` (not `.descriptor`).
 - Module is `open`.
 
 **Dependencies:** `base-foundation`, `base-marshalling`, `base-mereology`, `codemodel-foundation` + `codemodel-hierarchical` + `codemodel-expression` (all transitive).
