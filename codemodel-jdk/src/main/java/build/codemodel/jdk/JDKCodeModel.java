@@ -579,13 +579,7 @@ public class JDKCodeModel
         }
 
         // include the generic parameter declarations on the type itself
-        final TypeVariable<?>[] typeParameters = classType.getTypeParameters();
-        if (typeParameters.length > 0) {
-            final var typeVars = Arrays.stream(typeParameters)
-                .map(tp -> (TypeVariableUsage) getTypeUsage(tp))
-                .toList();
-            typeDescriptor.addTrait(ParameterizedTypeDescriptor.of(this, typeVars.stream()));
-        }
+        addTypeParameters(typeDescriptor, classType.getTypeParameters());
 
         // include the ExtendsTypeDescriptor (should a super-class be defined)
         final var superType = classType.getAnnotatedSuperclass();
@@ -709,10 +703,27 @@ public class JDKCodeModel
                 descriptor -> annotations.forEach(descriptor::addTrait)));
     }
 
+    /**
+     * Adds a {@link ParameterizedTypeDescriptor} capturing {@code typeParameters} (with their bounds
+     * and annotations) to {@code traitable}, or nothing when there are none. Applies equally to the
+     * generic parameters declared on a class, a method, or a constructor - mirroring
+     * {@code TypeMirrorResolver#addTypeParameters}, which the source-parsing paths call for all three.
+     */
+    private void addTypeParameters(final Traitable traitable, final TypeVariable<?>[] typeParameters) {
+        if (typeParameters.length == 0) {
+            return;
+        }
+        final var typeVariableUsages = Arrays.stream(typeParameters)
+            .map(typeParameter -> (TypeVariableUsage) getTypeUsage(typeParameter))
+            .toList();
+        traitable.addTrait(ParameterizedTypeDescriptor.of(this, typeVariableUsages.stream()));
+    }
+
     private void populateConstructor(final JDKTypeDescriptor typeDescriptor, final Constructor<?> constructor,
                                      final int order) {
         final var formalParameters = getFormalParameters(constructor.getParameters());
         final var constructorDescriptor = ConstructorDescriptor.of(typeDescriptor, formalParameters);
+        addTypeParameters(constructorDescriptor, constructor.getTypeParameters());
         constructorDescriptor.addTrait(new DeclarationOrder(order));
 
         // include the annotations on the ConstructorDescriptor
@@ -756,6 +767,9 @@ public class JDKCodeModel
 
         final var methodDescriptor = MethodDescriptor
             .of(typeDescriptor, methodName, returnType, formalParameters);
+
+        // include the generic parameter declarations on the method itself
+        addTypeParameters(methodDescriptor, method.getTypeParameters());
 
         final var methodModifiers = method.getModifiers();
 
