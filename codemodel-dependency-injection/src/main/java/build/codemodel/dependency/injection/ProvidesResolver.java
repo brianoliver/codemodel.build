@@ -116,7 +116,10 @@ public class ProvidesResolver
             .orElseThrow(() -> new InjectionException(
                 "No MethodType trait for @Provides method " + methodDescriptor));
 
-        method.trySetAccessible();
+        if (!method.trySetAccessible()) {
+            throw new InjectionException(
+                "Can't invoke @Provides method " + method + " as it's inaccessible");
+        }
 
         try {
             final var value = method.invoke(this.providerObject);
@@ -131,7 +134,7 @@ public class ProvidesResolver
                     return dependency;
                 }
             });
-        } catch (final IllegalAccessException | InvocationTargetException e) {
+        } catch (final IllegalAccessException | IllegalArgumentException | InvocationTargetException e) {
             throw new InjectionException("@Provides method " + method + " failed", e);
         }
     }

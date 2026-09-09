@@ -6,7 +6,9 @@ import build.codemodel.objectoriented.descriptor.MethodDescriptor;
 import jakarta.inject.Inject;
 import jakarta.inject.Named;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -243,6 +245,35 @@ class ProvidesResolverTests
     private static boolean carriesProvidesAnnotation(final MethodDescriptor descriptor) {
         return descriptor.traits(AnnotationTypeUsage.class)
             .anyMatch(annotation -> annotation.typeName().canonicalName().equals(Provides.class.getCanonicalName()));
+    }
+
+    /**
+     * When the module system denies access to a {@link Provides} method - here, a public method on a
+     * class in a non-exported, non-open package of a synthesized named module (see {@link ForeignModule})
+     * - {@link java.lang.reflect.Method#trySetAccessible()} returns {@code false} and the subsequent
+     * {@code invoke} would throw a bare {@link IllegalAccessException}. {@link ProvidesResolver} must
+     * instead check the return value and fail with a message that names inaccessibility as the cause,
+     * mirroring {@link FieldInjectionPoint} / {@link MethodInjectionPoint} / {@link ConstructorInjectionPoint}.
+     */
+    @Test
+    void shouldFailDescriptivelyWhenProvidesMethodIsInaccessible(@TempDir final Path moduleDir) throws Exception {
+        final var framework = createInjectionFramework();
+        final var provider = ForeignModule.define(moduleDir).newProvider();
+
+        final var resolver = ProvidesResolver.of(provider, framework);
+
+        final var dependency = IndependentDependency.of(
+            framework.codeModel().getTypeUsage(String.class),
+            _ -> Stream.empty());
+
+        // sanity: the @Provides method really is unreachable via deep reflection
+        final var method = provider.getClass().getDeclaredMethod("greeting");
+        assertThat(method.trySetAccessible()).isFalse();
+
+        assertThatThrownBy(() -> resolver.resolve(dependency))
+            .isInstanceOf(InjectionException.class)
+            .hasMessageContaining("greeting")
+            .hasMessageContaining("inaccessible");
     }
 
     // --- fixtures ---
