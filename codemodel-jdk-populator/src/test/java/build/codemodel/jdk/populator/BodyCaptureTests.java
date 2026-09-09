@@ -414,6 +414,56 @@ class BodyCaptureTests {
     }
 
     @Test
+    void shouldCaptureFinalModifierOnCatchParameter() {
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.FinalCatcher", """
+                package build.codemodel.jdk.example;
+                import java.io.IOException;
+                public class FinalCatcher {
+                    public void run() {
+                        try {
+                            throw new IOException();
+                        } catch (final IOException e) {
+                            // handle
+                        }
+                        try {
+                            throw new IOException();
+                        } catch (IOException e) {
+                            // handle
+                        }
+                        try {
+                            throw new IOException();
+                        } catch (final IllegalStateException | java.io.UncheckedIOException e) {
+                            // handle
+                        }
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.FinalCatcher");
+        final var descriptor = codeModel.getTypeDescriptor(typeName).orElseThrow();
+
+        final var method = descriptor.traits(MethodDescriptor.class)
+            .filter(m -> m.methodName().name().toString().equals("run"))
+            .findFirst().orElseThrow();
+        final var body = method.getTrait(MethodBodyDescriptor.class).orElseThrow().body();
+        final var catches = body.statements()
+            .filter(s -> s instanceof Try)
+            .map(s -> (Try) s)
+            .flatMap(Try::catches)
+            .toList();
+
+        assertThat(catches).hasSize(3);
+        assertThat(catches.get(0).isFinal()).isTrue();
+        assertThat(catches.get(1).isFinal()).isFalse();
+        assertThat(catches.get(2).isFinal()).isTrue();
+        assertThat(catches.get(2).exceptionTypes()).hasSize(2);
+    }
+
+    @Test
     void shouldCaptureBareReturnAsEmptyOptional() {
         final var source = JavaFileObjects.forSourceString(
             "build.codemodel.jdk.example.Greeter", """

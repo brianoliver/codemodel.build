@@ -49,6 +49,11 @@ public final class CatchClause
     extends AbstractStatement {
 
     /**
+     * Whether the exception parameter is declared {@code final}.
+     */
+    private final boolean isFinal;
+
+    /**
      * The resolved types of the caught exception(s).
      * Has more than one element for multi-catch clauses (e.g. {@code catch (IOException | RuntimeException e)}).
      */
@@ -72,10 +77,12 @@ public final class CatchClause
     private Block body;
 
     private CatchClause(final CodeModel codeModel,
+                        final boolean isFinal,
                         final List<TypeUsage> exceptionTypes,
                         final String paramName,
                         final Block body) {
         super(codeModel);
+        this.isFinal = isFinal;
         this.exceptionTypes = Objects.requireNonNull(exceptionTypes, "exceptionTypes must not be null");
         this.paramName = Objects.requireNonNull(paramName, "paramName must not be null");
         this.body = body;
@@ -85,10 +92,12 @@ public final class CatchClause
     public CatchClause(@Bound final CodeModel codeModel,
                        final Marshaller marshaller,
                        final Stream<Marshalled<Trait>> traits,
+                       final Boolean isFinal,
                        final Stream<Marshalled<TypeUsage>> exceptionTypes,
                        final String paramName,
                        final Marshalled<Block> body) {
         super(codeModel, marshaller, traits);
+        this.isFinal = isFinal != null && isFinal;
         this.exceptionTypes = exceptionTypes == null ? List.of() : exceptionTypes.map(marshaller::unmarshal).toList();
         this.paramName = paramName;
         this.body = marshaller.unmarshal(body);
@@ -97,13 +106,24 @@ public final class CatchClause
     @Marshal
     public void destructor(final Marshaller marshaller,
                            final Out<Stream<Marshalled<Trait>>> traits,
+                           final Out<Boolean> isFinal,
                            final Out<Stream<Marshalled<TypeUsage>>> exceptionTypes,
                            final Out<String> paramName,
                            final Out<Marshalled<Block>> body) {
         super.destructor(marshaller, traits);
+        isFinal.set(this.isFinal);
         exceptionTypes.set(this.exceptionTypes.stream().map(marshaller::marshal));
         paramName.set(this.paramName);
         body.set(marshaller.marshal(this.body));
+    }
+
+    /**
+     * Returns {@code true} if the exception parameter is declared {@code final}.
+     *
+     * @return {@code true} if the parameter is {@code final}
+     */
+    public boolean isFinal() {
+        return this.isFinal;
     }
 
     /**
@@ -142,6 +162,7 @@ public final class CatchClause
     @Override
     public boolean equals(final Object object) {
         return object instanceof CatchClause other
+            && this.isFinal == other.isFinal
             && Objects.equals(this.exceptionTypes, other.exceptionTypes)
             && Objects.equals(this.paramName, other.paramName)
             && Objects.equals(this.body, other.body)
@@ -152,16 +173,18 @@ public final class CatchClause
      * Creates a {@link CatchClause}.
      *
      * @param codeModel      the {@link CodeModel}
+     * @param isFinal        whether the exception parameter is {@code final}
      * @param exceptionTypes the resolved {@link TypeUsage}s of the caught exception(s)
      * @param paramName      the name of the exception parameter
      * @param body           the catch body {@link Block}
      * @return a new {@link CatchClause}
      */
     public static CatchClause of(final CodeModel codeModel,
+                                 final boolean isFinal,
                                  final List<TypeUsage> exceptionTypes,
                                  final String paramName,
                                  final Block body) {
-        return new CatchClause(codeModel, exceptionTypes, paramName,
+        return new CatchClause(codeModel, isFinal, exceptionTypes, paramName,
             Objects.requireNonNull(body, "body must not be null"));
     }
 
@@ -172,14 +195,16 @@ public final class CatchClause
      * once before any other code observes this node.
      *
      * @param codeModel      the {@link CodeModel}
+     * @param isFinal        whether the exception parameter is {@code final}
      * @param exceptionTypes the resolved {@link TypeUsage}s of the caught exception(s)
      * @param paramName      the name of the exception parameter
      * @return a new bodyless {@link CatchClause}, to be finished with {@link #completeBody}
      */
     public static CatchClause ofPending(final CodeModel codeModel,
+                                        final boolean isFinal,
                                         final List<TypeUsage> exceptionTypes,
                                         final String paramName) {
-        return new CatchClause(codeModel, exceptionTypes, paramName, null);
+        return new CatchClause(codeModel, isFinal, exceptionTypes, paramName, null);
     }
 
     /**

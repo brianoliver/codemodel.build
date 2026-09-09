@@ -270,7 +270,10 @@ public class JdkStatementConverter
             exprConverter.addSourceLocation(typeTree).ifPresent(type::addTrait);
             types = List.of(type);
         }
+        final boolean isFinal = c.getParameter().getModifiers() != null
+            && c.getParameter().getModifiers().getFlags().contains(Modifier.FINAL);
         final var catchClause = CatchClause.ofPending(codeModel,
+            isFinal,
             types,
             c.getParameter().getName().toString());
         exprConverter.addSourceLocation(c.getParameter()).ifPresent(catchClause::addTrait);
