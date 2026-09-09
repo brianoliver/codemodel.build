@@ -124,7 +124,7 @@ class MereologyTests {
     void catchClausePartsContainsExceptionTypesAndBody() {
         final var exType = codeModel.getTypeUsage(Exception.class);
         final var body = block(Assert.of(bool(false), Optional.empty()));
-        final var stmt = CatchClause.of(codeModel, List.of(exType), "e", body);
+        final var stmt = CatchClause.of(codeModel, false, List.of(exType), "e", body);
         final var parts = stmt.parts().toList();
         assertTrue(parts.contains(exType));
         assertTrue(parts.contains(body));
@@ -301,7 +301,7 @@ class MereologyTests {
     @Test
     void tryPartsContainsBodyCatchesAndFinally() {
         final var body = block(Assert.of(bool(true), Optional.empty()));
-        final var catchClause = CatchClause.of(codeModel, List.of(codeModel.getTypeUsage(Exception.class)), "e", block(Throw.of(variable("e"))));
+        final var catchClause = CatchClause.of(codeModel, false, List.of(codeModel.getTypeUsage(Exception.class)), "e", block(Throw.of(variable("e"))));
         final var finallyBlock = block(Assert.of(bool(false), Optional.empty()));
         final var stmt = Try.of(codeModel, body, Stream.of(catchClause), Optional.of(finallyBlock));
         final var parts = stmt.parts().toList();
