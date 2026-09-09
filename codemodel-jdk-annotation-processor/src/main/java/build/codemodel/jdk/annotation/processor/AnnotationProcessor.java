@@ -468,6 +468,7 @@ public class AnnotationProcessor
         final var name = codeModel.getNameProvider().getIrreducibleName(constantElement.getSimpleName());
         final var enumConstantDescriptor = EnumConstantDescriptor.of(codeModel, name, order);
         enumConstantDescriptor.addTrait(SourceLocation.elementRef(constantElement));
+        resolver().addTypeAnnotations(enumConstantDescriptor, constantElement);
 
         typeDescriptor.addTrait(enumConstantDescriptor);
 

@@ -276,6 +276,42 @@ class AnnotationCaptureGapsTests {
     }
 
     @Test
+    void shouldCaptureAnnotationOnEnumConstant() {
+        final var source = JavaFileObjects.forSourceString("build.codemodel.jdk.example.Color", """
+            package build.codemodel.jdk.example;
+            import java.lang.annotation.*;
+
+            @interface Marker {}
+
+            public enum Color {
+                @Deprecated @Marker RED,
+                GREEN;
+            }
+            """);
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.Color");
+        final var constants = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .traits(build.codemodel.jdk.descriptor.EnumConstantDescriptor.class)
+            .toList();
+        assertThat(constants).hasSize(2);
+
+        final var red = constants.stream()
+            .filter(c -> c.name().toString().equals("RED"))
+            .findFirst().orElseThrow();
+        final var green = constants.stream()
+            .filter(c -> c.name().toString().equals("GREEN"))
+            .findFirst().orElseThrow();
+
+        assertThat(red.traits(AnnotationTypeUsage.class)
+            .map(a -> a.typeName().name().toString())
+            .toList())
+            .containsExactlyInAnyOrder("Deprecated", "Marker");
+        assertThat(green.traits(AnnotationTypeUsage.class).toList()).isEmpty();
+    }
+
+    @Test
     void shouldCaptureRecordComponentOnlyAnnotation() {
         final var source = JavaFileObjects.forSourceString("build.codemodel.jdk.example.Point", """
             package build.codemodel.jdk.example;

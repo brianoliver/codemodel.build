@@ -700,6 +700,7 @@ public class JdkInitializer
                 } else if (ve.getKind() == ElementKind.ENUM_CONSTANT) {
                     final var name = nameProvider.getIrreducibleName(ve.getSimpleName());
                     final var enumConstantDescriptor = EnumConstantDescriptor.of(codeModel, name, enumConstantOrder++);
+                    resolver.addTypeAnnotations(enumConstantDescriptor, ve);
                     bodyTasks.add(() -> enumConstantDescriptor.addTrait(new FieldInitializerDescriptor(exprConverter.convert(vt.getInitializer()))));
                     addSourceLocation(cut, vt, enumConstantDescriptor);
                     typeDescriptor.addTrait(enumConstantDescriptor);
