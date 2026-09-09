@@ -30,6 +30,7 @@ import build.codemodel.jdk.JDKCodeModel;
 import build.codemodel.jdk.descriptor.JDKModuleDescriptor;
 import build.codemodel.jdk.descriptor.UsesDescriptor;
 import build.codemodel.objectoriented.descriptor.MethodDescriptor;
+import build.codemodel.objectoriented.descriptor.ParameterizedTypeDescriptor;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -193,6 +194,50 @@ class ModuleAwareTypeNameTests {
     }
 
     @Test
+    void typeVariableTypeNameCarriesDeclaringModuleViaJavac() {
+        final var moduleInfo = JavaFileObjects.forSourceString("module-info", """
+            module com.example {
+            }
+            """);
+        final var source = JavaFileObjects.forSourceString("com.example.Holder", """
+            package com.example;
+            public class Holder<T> {
+                public T value() { return null; }
+            }
+            """);
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source, moduleInfo)));
+
+        final var moduleName = codeModel.getNameProvider().getModuleName("com.example").orElseThrow();
+        final var holder = codeModel.getJDKTypeDescriptor("com.example.Holder").orElseThrow();
+
+        final var returnTypeName = ((NamedTypeUsage) holder.traits(MethodDescriptor.class)
+            .filter(md -> md.methodName().name().toString().equals("value"))
+            .findFirst().orElseThrow()
+            .returnType()).typeName();
+
+        assertThat(returnTypeName.moduleName())
+            .as("Holder<T>'s T is declared on a class in module com.example; its TypeName must "
+                + "carry that module rather than assuming the unnamed module")
+            .contains(moduleName);
+
+        // The declaration site (Holder's ParameterizedTypeDescriptor) must resolve T to the same
+        // module-scoped TypeName - not the bare "T" that resolveTypeParameter used to hand back - so
+        // a usage of T and its declaration line up.
+        final var declaredTypeVariableName = holder.getTrait(ParameterizedTypeDescriptor.class).orElseThrow()
+            .typeVariables()
+            .findFirst().orElseThrow()
+            .typeName();
+
+        assertThat(declaredTypeVariableName.moduleName())
+            .as("the declared type parameter <T> on Holder must carry its declaring module too")
+            .contains(moduleName);
+        assertThat(declaredTypeVariableName)
+            .as("the declared <T> and a usage of T must resolve to the same TypeName")
+            .isEqualTo(returnTypeName);
+    }
+
+    @Test
     void typeVariablesFromDifferentDeclaringTypesAreDistinguishableViaReflection() {
         final var codeModel = new JDKCodeModel(new NonCachingNameProvider());
 
@@ -209,5 +254,11 @@ class ModuleAwareTypeNameTests {
             .as("List<E>'s E and Set<E>'s E are distinct type variables declared on distinct "
                 + "classes; their TypeNames must not collide just because both happen to be named E")
             .isNotEqualTo(setElementTypeName);
+
+        final var javaBase = codeModel.getNameProvider().getModuleName("java.base");
+        assertThat(listElementTypeName.moduleName())
+            .as("List is in java.base, so the reflection path must scope its E under that module")
+            .isEqualTo(javaBase);
+        assertThat(listElementTypeName.name().toString()).isEqualTo("E");
     }
 }

@@ -43,10 +43,14 @@ public class RecursivelyDefinedTypeDiscoveryTests {
 
         final var typeVar = typeDescriptor.getTrait(ParameterizedTypeDescriptor.class)
             .orElseThrow().typeVariables().findFirst().orElseThrow();
-        // T is scoped under its declaring type (Discover.T, not bare "T") so that a type variable
-        // sharing a name with one declared elsewhere (e.g. another class's own <T>) doesn't collide.
-        assertThat(typeVar.toString())
-            .isEqualTo("T extends com.example/com.example.Discover<com.example/com.example.Discover$T>");
-        assertThat(typeVar.canonicalName()).isEqualTo("T extends com.example.Discover<com.example.Discover.T>");
+        // In the model T is scoped under its declaring type so it can't collide with a <T> declared
+        // elsewhere (see typeName().name() vs typeName() below). That scoping is a model concern only:
+        // when rendered, the variable - the declaration token and the recursive back-reference in its
+        // own bound alike - reads as the plain identifier "T". toString() still keeps the module on
+        // the raw type Discover; canonicalName() strips it.
+        assertThat(typeVar.typeName().toString()).isEqualTo("com.example/com.example.Discover$T");
+        assertThat(typeVar.typeName().name().toString()).isEqualTo("T");
+        assertThat(typeVar.toString()).isEqualTo("T extends com.example/com.example.Discover<T>");
+        assertThat(typeVar.canonicalName()).isEqualTo("T extends com.example.Discover<T>");
     }
 }
