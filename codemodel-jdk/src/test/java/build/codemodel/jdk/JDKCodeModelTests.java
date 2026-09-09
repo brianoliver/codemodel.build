@@ -34,6 +34,7 @@ import build.codemodel.jdk.example.ColorExample;
 import build.codemodel.jdk.example.Container;
 import build.codemodel.jdk.example.Description;
 import build.codemodel.jdk.example.FinalParamExample;
+import build.codemodel.jdk.example.GenericMembersExample;
 import build.codemodel.jdk.example.MultiBoundContainer;
 import build.codemodel.jdk.example.NonAbstractPerson;
 import build.codemodel.jdk.example.OuterExample;
@@ -558,6 +559,42 @@ class JDKCodeModelTests {
         assertThat(typeVar.typeName().name().toString()).isEqualTo("T");
         assertThat(typeVar.upperBound()).isPresent();
         assertThat(((NamedTypeUsage) typeVar.upperBound().get()).typeName().toString()).contains("Number");
+    }
+
+    /**
+     * Demonstrates: generic parameters declared on a <em>method</em> and on a <em>constructor</em>
+     * (rather than on the type) are captured as their own {@link ParameterizedTypeDescriptor}s on the
+     * reflection path, matching the source-parsing paths (see
+     * {@code GenericsDiscoveryTests.shouldDiscoverGenericMethodTypeParameter}).
+     */
+    @Test
+    void shouldDiscoverGenericMethodAndConstructorTypeParametersViaReflection() {
+        final var codeModel = createCodeModel();
+        final var descriptor = codeModel.getJDKTypeDescriptor(GenericMembersExample.class).orElseThrow();
+
+        // the type itself is not generic
+        assertThat(descriptor.getTrait(ParameterizedTypeDescriptor.class)).isEmpty();
+
+        final var method = descriptor.traits(MethodDescriptor.class)
+            .filter(m -> m.methodName().name().toString().equals("unwrap"))
+            .findFirst().orElseThrow();
+        final var methodTypeVar = method.getTrait(ParameterizedTypeDescriptor.class)
+            .orElseThrow()
+            .typeVariables()
+            .findFirst()
+            .orElseThrow();
+        assertThat(methodTypeVar.typeName().name().toString()).isEqualTo("T");
+        assertThat(((NamedTypeUsage) methodTypeVar.upperBound().orElseThrow()).typeName().toString())
+            .contains("Number");
+
+        final var constructor = descriptor.getTrait(ConstructorDescriptor.class).orElseThrow();
+        final var constructorTypeVar = constructor.getTrait(ParameterizedTypeDescriptor.class)
+            .orElseThrow()
+            .typeVariables()
+            .findFirst()
+            .orElseThrow();
+        assertThat(constructorTypeVar.typeName().name().toString()).isEqualTo("C");
+        assertThat(constructorTypeVar.upperBound()).isEmpty();
     }
 
     /**
