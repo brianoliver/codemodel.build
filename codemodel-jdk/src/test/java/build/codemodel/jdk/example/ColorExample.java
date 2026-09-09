@@ -24,6 +24,7 @@ package build.codemodel.jdk.example;
  * A simple enum type with declared constants, used to exercise enum constant modeling.
  */
 public enum ColorExample {
+    @Deprecated
     RED,
     GREEN,
     BLUE;

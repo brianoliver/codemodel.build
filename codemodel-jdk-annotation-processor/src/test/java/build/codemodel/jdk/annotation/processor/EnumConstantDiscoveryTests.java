@@ -20,6 +20,7 @@ package build.codemodel.jdk.annotation.processor;
  * #L%
  */
 
+import build.codemodel.foundation.usage.AnnotationTypeUsage;
 import build.codemodel.jdk.descriptor.EnumConstantDescriptor;
 import build.codemodel.objectoriented.descriptor.MethodDescriptor;
 import org.junit.jupiter.api.Test;
@@ -75,5 +76,39 @@ class EnumConstantDiscoveryTests extends AnnotationProcessorTests {
         assertThat(typeDescriptor.traits(MethodDescriptor.class)
             .map(m -> m.methodName().name().toString()))
             .contains("values", "valueOf");
+    }
+
+    @Test
+    void shouldCaptureEnumConstantAnnotations() {
+        final var source =
+            """
+                    import build.codemodel.jdk.annotation.discovery.Discoverable;
+
+                    @Discoverable
+                    public enum Color {
+                        @Deprecated RED,
+                        GREEN
+                    }
+                """;
+        final var annotationProcessor = new AnnotationProcessor();
+        compile(annotationProcessor, "Color", source);
+
+        final var codeModel = annotationProcessor.getCodeModel().orElseThrow();
+        final var typeName = codeModel.getNameProvider().getEmptyModuleTypeName("Color");
+        final var typeDescriptor = codeModel.getTypeDescriptor(typeName).orElseThrow();
+
+        final var constants = typeDescriptor.traits(EnumConstantDescriptor.class).toList();
+        final var red = constants.stream()
+            .filter(c -> c.name().toString().equals("RED"))
+            .findFirst().orElseThrow();
+        final var green = constants.stream()
+            .filter(c -> c.name().toString().equals("GREEN"))
+            .findFirst().orElseThrow();
+
+        assertThat(red.traits(AnnotationTypeUsage.class)
+            .map(a -> a.typeName().name().toString())
+            .toList())
+            .containsExactly("Deprecated");
+        assertThat(green.traits(AnnotationTypeUsage.class).toList()).isEmpty();
     }
 }

@@ -619,7 +619,17 @@ public class JDKCodeModel
                 .forEach(constant -> {
                     final var enumConstant = (Enum<?>) constant;
                     final var name = getNameProvider().getIrreducibleName(enumConstant.name());
-                    typeDescriptor.addTrait(EnumConstantDescriptor.of(this, name, enumConstant.ordinal()));
+                    final var enumConstantDescriptor = EnumConstantDescriptor.of(this, name, enumConstant.ordinal());
+                    // capture the constant's own annotations (e.g. @Deprecated RED), carried by the
+                    // backing field; mirrors the source-parsing path's addTypeAnnotations call
+                    try {
+                        getAnnotations(classType.getDeclaredField(enumConstant.name()))
+                            .forEach(enumConstantDescriptor::addTrait);
+                    } catch (final NoSuchFieldException e) {
+                        throw new IllegalStateException(
+                            "Enum constant " + enumConstant.name() + " of " + typeName + " has no backing field", e);
+                    }
+                    typeDescriptor.addTrait(enumConstantDescriptor);
                 });
         }
 

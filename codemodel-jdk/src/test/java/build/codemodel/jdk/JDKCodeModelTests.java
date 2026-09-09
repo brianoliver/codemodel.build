@@ -58,6 +58,7 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.util.Comparator;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -830,6 +831,15 @@ class JDKCodeModelTests {
             .map(f -> f.fieldName().toString()))
             .as("enum constants should not be double-modeled as fields")
             .containsExactly("label");
+
+        // an enum constant's own annotations (@Deprecated RED) are carried by the backing field and
+        // must land on the EnumConstantDescriptor, matching the source-parsing path
+        final var constantsByName = descriptor.traits(EnumConstantDescriptor.class)
+            .collect(Collectors.toMap(c -> c.name().toString(), c -> c));
+        assertThat(constantsByName.get("RED").traits(AnnotationTypeUsage.class)
+            .map(a -> a.typeName().name().toString()))
+            .containsExactly("Deprecated");
+        assertThat(constantsByName.get("GREEN").traits(AnnotationTypeUsage.class).toList()).isEmpty();
     }
 
     @Test
