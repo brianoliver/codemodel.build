@@ -22,10 +22,12 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.io.StringReader;
 import java.io.StringWriter;
+import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -171,6 +173,60 @@ class MarshallingTests {
             AnnotationValue.of(codeModel, "arrayValue", new AnnotationValue.Value.Array(List.of(
                 new AnnotationValue.Value.Literal("a"),
                 new AnnotationValue.Value.Literal("b")))));
+    }
+
+    /**
+     * Ensures that each JLS-legal {@link AnnotationValue.Value.Literal} payload type survives a
+     * marshal → transport → unmarshal round-trip with its runtime type intact.
+     *
+     * @throws IOException if an error occurs during marshalling, transport or unmarshalling
+     */
+    @Test
+    void shouldMarshallAndTransportAndUnmarshallAnnotationValueLiteral()
+        throws IOException {
+
+        final Object[] payloads = {
+            Boolean.TRUE,
+            (byte) 7,
+            (short) 9,
+            42,
+            123456789012L,
+            3.14f,
+            2.718281828d,
+            'z',
+            "hello",
+        };
+
+        for (final var payload : payloads) {
+            final var context = "payload [" + payload + "] of type " + payload.getClass().getName();
+
+            final var unmarshalled = marshallAndTransportAndUnMarshalAndAssert(
+                AnnotationValue.of(codeModel, "literalValue", new AnnotationValue.Value.Literal(payload)),
+                context);
+
+            final var literal = (AnnotationValue.Value.Literal) unmarshalled.value();
+            assertEquals(payload.getClass(), literal.value().getClass(),
+                "runtime type must survive the round-trip for " + context);
+        }
+    }
+
+    /**
+     * The {@link AnnotationValue.Value.Literal} canonical constructor rejects a payload that is
+     * not one of the JLS-legal element types (a primitive wrapper or {@link String}).
+     */
+    @Test
+    void shouldRejectANonJlsLiteralPayload() {
+        assertThrows(IllegalArgumentException.class,
+            () -> new AnnotationValue.Value.Literal(new Date()));
+    }
+
+    /**
+     * The {@link AnnotationValue.Value.Literal} canonical constructor rejects a {@code null} payload.
+     */
+    @Test
+    void shouldRejectANullLiteralPayload() {
+        assertThrows(NullPointerException.class,
+            () -> new AnnotationValue.Value.Literal(null));
     }
 
     /**
@@ -323,6 +379,12 @@ class MarshallingTests {
 
     private <T> void marshallAndTransportAndUnMarshalAndAssert(final T original)
         throws IOException {
+        marshallAndTransportAndUnMarshalAndAssert(original, null);
+    }
+
+    @SuppressWarnings("UnusedReturnValue")
+    private <T> T marshallAndTransportAndUnMarshalAndAssert(final T original, final String message)
+        throws IOException {
         final var marshaller = Marshalling.newMarshaller();
         final var marshalled = marshaller.marshal(original);
 
@@ -351,6 +413,8 @@ class MarshallingTests {
 
         final var unmarshalled = marshaller.unmarshal(transported);
 
-        assertEquals(original, unmarshalled);
+        assertEquals(original, unmarshalled, message);
+
+        return unmarshalled;
     }
 }
