@@ -61,11 +61,40 @@ public class AnnotationValue
 
         /**
          * A primitive or {@link String} literal.
+         *
+         * <p>The {@link #value()} is always one of the eight primitive wrapper types
+         * ({@link Boolean}, {@link Byte}, {@link Short}, {@link Integer}, {@link Long},
+         * {@link Character}, {@link Float}, {@link Double}) or a {@link String} — the element
+         * types the JLS (9.6.1) permits for a non-{@code Class}, non-enum, non-annotation,
+         * non-array annotation element. The canonical constructor rejects anything else.
+         *
+         * <p>Marshalled as a raw {@link Object}: the {@code Marshaller} matches unmarshalling
+         * schemas by runtime type, and {@code JsonTransport} wraps an {@code Object}-typed
+         * parameter in a {@code @type}/{@code value} envelope, so the concrete type survives a
+         * round-trip as long as the transport has a codec for it. {@code base-transport-json}
+         * ships codecs for all eight wrappers and {@code String}.
          */
         record Literal(Object value) implements Value {
 
+            // Unlike the other Value records, Literal carries an unconstrained Object, so its
+            // canonical constructor validates the payload — on both the direct and @Unmarshal paths.
             @Unmarshal
             public Literal {
+                Objects.requireNonNull(value, "The annotation Literal value must not be null");
+                if (!(value instanceof Boolean
+                    || value instanceof Byte
+                    || value instanceof Short
+                    || value instanceof Integer
+                    || value instanceof Long
+                    || value instanceof Character
+                    || value instanceof Float
+                    || value instanceof Double
+                    || value instanceof String)) {
+
+                    throw new IllegalArgumentException(
+                        "An annotation Literal value must be a primitive wrapper or String, but was ["
+                            + value.getClass().getName() + "]");
+                }
             }
 
             @Marshal
