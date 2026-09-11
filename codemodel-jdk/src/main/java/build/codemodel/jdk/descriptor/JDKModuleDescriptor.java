@@ -31,6 +31,7 @@ import build.codemodel.foundation.naming.ModuleName;
 import build.codemodel.foundation.naming.Namespace;
 import build.codemodel.foundation.naming.TypeName;
 import build.codemodel.foundation.usage.AnnotationTypeUsage;
+import build.codemodel.foundation.usage.AnnotationValue;
 import build.codemodel.foundation.usage.SpecificTypeUsage;
 import build.codemodel.foundation.usage.TypeUsage;
 
@@ -44,6 +45,7 @@ import java.lang.reflect.AccessFlag;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiFunction;
@@ -222,14 +224,15 @@ public final class JDKModuleDescriptor
             scanner.consume(SEMICOLON);
         }
 
-        // capture annotations that legally precede the module declaration (e.g. @SomeAnnotation or @Some.Annotation(...))
-        final var annotationNames = new ArrayList<String>();
-        while (scanner.follows(Pattern.compile("@[\\w.]+"))) {
-            final String token = scanner.consume(Pattern.compile("@[\\w.]+"));
-            annotationNames.add(token.substring(1)); // strip leading @
-            if (scanner.follows(Pattern.compile("\\("))) {
-                scanner.consume(Pattern.compile("\\([^)]*\\)"));
+        // capture annotations that legally precede the module declaration (e.g. @SomeAnnotation or @Some.Annotation(bar = 1))
+        final var annotations = new ArrayList<ParsedAnnotation>();
+        while (scanner.follows(ANNOTATION_TOKEN)) {
+            final String token = scanner.consume(ANNOTATION_TOKEN);
+            final var values = new ArrayList<AnnotationValue>();
+            if (scanner.follows("(")) {
+                parseAnnotationArguments(codeModel, scanner.consumeBalanced('(', ')'), values);
             }
+            annotations.add(new ParsedAnnotation(token.substring(1), values)); // strip leading @
         }
 
         final boolean open = scanner.optionallyConsume(OPEN).isPresent();
@@ -246,10 +249,10 @@ public final class JDKModuleDescriptor
             descriptor.computeIfAbsent(OpenModule.class, _ -> OpenModule.OPEN);
         }
 
-        annotationNames.forEach(name ->
+        annotations.forEach(annotation ->
             descriptor.addTrait(AnnotationTypeUsage.of(codeModel,
-                resolveTypeNameByFqn(codeModel, name),
-                Stream.empty())));
+                resolveTypeNameByFqn(codeModel, annotation.name()),
+                annotation.values().stream())));
 
         scanner.consume(OPEN_BRACE);
 
@@ -692,6 +695,251 @@ public final class JDKModuleDescriptor
     private TypeUsage typeUsage(final String rawName) {
         final String canonical = rawName.replace('/', '.');
         return SpecificTypeUsage.of(codeModel(), resolveTypeNameByFqn(codeModel(), canonical));
+    }
+
+    // ---- Annotation-argument parsing (Scanner path only) ----------------
+    // Best-effort textual parse: there is no javac AST or Elements at this call site, so
+    // some element values can't be fully attributed from source text alone:
+    //   - an unqualified identifier used as an enum constant (e.g. @Foo(RUNTIME) after a
+    //     static import) can't be tied to an enum type, and is skipped;
+    //   - a qualified constant reference Type.NAME is recorded as an EnumConstant even though
+    //     it could equally be a reference to a static-final constant field;
+    //   - integer literals are always modelled as int/long (their wrapper type), even where
+    //     the element type would narrow them to byte/short.
+    // The common JLS 9.6.1 shapes - string/char/numeric/boolean literals, X.class, nested
+    // annotations and arrays of any of these - are captured. Text-block (""") values are not.
+    // A structural parse failure at any nesting depth drops the whole top-level argument list,
+    // leaving the annotation name-only (the prior behaviour).
+
+    private record ParsedAnnotation(String name, List<AnnotationValue> values) {
+    }
+
+    private static final Pattern ANNOTATION_TOKEN = Pattern.compile("@[\\w.]+");
+    private static final Pattern ANNOTATION_ELEMENT_NAME =
+        Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*");
+    private static final Pattern ANNOTATION_DOTTED_NAME =
+        Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)*");
+    private static final Pattern ANNOTATION_STRING_LITERAL =
+        Pattern.compile("\"(?:\\\\.|[^\"\\\\])*\"");
+    private static final Pattern ANNOTATION_TEXT_BLOCK_OPEN = Pattern.compile("\"\"\"");
+    private static final Pattern ANNOTATION_CHAR_LITERAL =
+        Pattern.compile("'(?:\\\\u[0-9a-fA-F]{4}|\\\\[0-7]{1,3}|\\\\.|[^'\\\\])'");
+    private static final Pattern ANNOTATION_NUMBER_LITERAL =
+        Pattern.compile("[+-]?(?:0[xX][0-9a-fA-F_]+"
+            + "|0[bB][01_]+"
+            + "|\\.[\\d_]+(?:[eE][+-]?\\d+)?"
+            + "|\\d[\\d_]*\\.?[\\d_]*(?:[eE][+-]?\\d+)?)[fFdDlL]?");
+
+    /**
+     * Parses the top-level argument list of a module annotation. Best-effort: any structural parse
+     * failure - including one raised while parsing a nested annotation - discards every argument
+     * parsed so far, leaving the annotation name-only.
+     */
+    private static void parseAnnotationArguments(final CodeModel codeModel,
+                                                 final String body,
+                                                 final List<AnnotationValue> out) {
+        try {
+            final var parsed = new ArrayList<AnnotationValue>();
+            readAnnotationArguments(codeModel, body, parsed);
+            out.addAll(parsed);
+        } catch (final RuntimeException e) {
+            // best-effort: a value we can't parse - a shape we don't recognise textually, or one
+            // that lexes as a number but isn't a valid Java literal - leaves the annotation name-only
+        }
+    }
+
+    /**
+     * Reads a (possibly nested) annotation argument list into {@code out}, propagating any parse
+     * failure to the caller so that {@link #parseAnnotationArguments} can drop the whole list.
+     */
+    private static void readAnnotationArguments(final CodeModel codeModel,
+                                                final String body,
+                                                final List<AnnotationValue> out) {
+        if (body == null || body.isBlank()) {
+            return;
+        }
+        final Scanner scanner = new Scanner(new StringReader(body))
+            .register(Filter.WHITESPACE)
+            .register(Filter.JAVA_SINGLE_LINE_COMMENT)
+            .register(Filter.JAVA_MULTILINE_COMMENT);
+        do {
+            parseAnnotationArgument(codeModel, scanner).ifPresent(out::add);
+        } while (scanner.optionallyConsume(",").isPresent());
+    }
+
+    private static Optional<AnnotationValue> parseAnnotationArgument(final CodeModel codeModel,
+                                                                    final Scanner scanner) {
+        if (scanner.follows(ANNOTATION_ELEMENT_NAME)) {
+            final String head = scanner.consume(ANNOTATION_ELEMENT_NAME);
+            if (scanner.optionallyConsume("=").isPresent()) {
+                return parseAnnotationValue(codeModel, scanner)
+                    .map(v -> AnnotationValue.of(codeModel, head, v));
+            }
+            // no '=' followed, so 'head' begins the implicit "value" element - a dotted name,
+            // X.class, an enum reference, or true / false
+            return parseNameValue(codeModel, scanner, head)
+                .map(v -> AnnotationValue.of(codeModel, "value", v));
+        }
+        return parseAnnotationValue(codeModel, scanner)
+            .map(v -> AnnotationValue.of(codeModel, "value", v));
+    }
+
+    private static Optional<AnnotationValue.Value> parseAnnotationValue(final CodeModel codeModel,
+                                                                       final Scanner scanner) {
+        if (scanner.follows(ANNOTATION_TEXT_BLOCK_OPEN)) {
+            // text blocks would need incidental-whitespace stripping (JLS 3.10.6); rather than
+            // risk a garbled value, bail so the whole argument list drops to name-only
+            throw new IllegalStateException("text block annotation values are not supported");
+        }
+        if (scanner.follows("{")) {
+            scanner.consume("{");
+            final var elements = new ArrayList<AnnotationValue.Value>();
+            if (!scanner.follows("}")) {
+                do {
+                    parseAnnotationValue(codeModel, scanner).ifPresent(elements::add);
+                } while (scanner.optionallyConsume(",").isPresent());
+            }
+            scanner.consume("}");
+            return Optional.of(new AnnotationValue.Value.Array(List.copyOf(elements)));
+        }
+        if (scanner.follows("@")) {
+            scanner.consume("@");
+            final String name = scanner.consume(ANNOTATION_DOTTED_NAME);
+            final var nestedValues = new ArrayList<AnnotationValue>();
+            if (scanner.follows("(")) {
+                // readAnnotationArguments (not parseAnnotationArguments) so a failure inside the
+                // nested annotation propagates and drops the whole top-level list
+                readAnnotationArguments(codeModel, scanner.consumeBalanced('(', ')'), nestedValues);
+            }
+            return Optional.of(new AnnotationValue.Value.Nested(AnnotationTypeUsage.of(codeModel,
+                resolveTypeNameByFqn(codeModel, name), nestedValues.stream())));
+        }
+        if (scanner.follows(ANNOTATION_STRING_LITERAL)) {
+            final String raw = scanner.consume(ANNOTATION_STRING_LITERAL);
+            return Optional.of(new AnnotationValue.Value.Literal(
+                unescapeJavaLiteral(raw.substring(1, raw.length() - 1))));
+        }
+        if (scanner.follows(ANNOTATION_CHAR_LITERAL)) {
+            final String raw = scanner.consume(ANNOTATION_CHAR_LITERAL);
+            return Optional.of(new AnnotationValue.Value.Literal(
+                unescapeJavaLiteral(raw.substring(1, raw.length() - 1)).charAt(0)));
+        }
+        if (scanner.follows(ANNOTATION_ELEMENT_NAME)) {
+            return parseNameValue(codeModel, scanner, scanner.consume(ANNOTATION_ELEMENT_NAME));
+        }
+        if (scanner.follows(ANNOTATION_NUMBER_LITERAL)) {
+            return Optional.of(new AnnotationValue.Value.Literal(
+                parseNumberLiteral(scanner.consume(ANNOTATION_NUMBER_LITERAL))));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Continues parsing a value whose leading identifier {@code head} has already been consumed:
+     * a {@code true}/{@code false} literal, a {@code Foo.class} reference, or a
+     * {@code Type.CONSTANT} reference. A bare identifier (no dot) can't be attributed textually
+     * and yields {@link Optional#empty()}. A dotted {@code Type.CONSTANT} is modelled as an
+     * {@link AnnotationValue.Value.EnumConstant} - textually it is indistinguishable from a
+     * reference to a static-final constant field, and enum constants are by far the common case.
+     */
+    private static Optional<AnnotationValue.Value> parseNameValue(final CodeModel codeModel,
+                                                                 final Scanner scanner,
+                                                                 final String head) {
+        final var name = new StringBuilder(head);
+        while (scanner.follows(".")) {
+            scanner.consume(".");
+            name.append('.').append(scanner.consume(ANNOTATION_ELEMENT_NAME));
+        }
+        final String full = name.toString();
+        if (full.equals("true") || full.equals("false")) {
+            return Optional.of(new AnnotationValue.Value.Literal(Boolean.valueOf(full)));
+        }
+        if (full.endsWith(".class")) {
+            return Optional.of(new AnnotationValue.Value.ClassRef(resolveTypeNameByFqn(
+                codeModel, full.substring(0, full.length() - ".class".length()))));
+        }
+        final int lastDot = full.lastIndexOf('.');
+        if (lastDot < 0) {
+            return Optional.empty();
+        }
+        return Optional.of(new AnnotationValue.Value.EnumConstant(
+            resolveTypeNameByFqn(codeModel, full.substring(0, lastDot)),
+            full.substring(lastDot + 1)));
+    }
+
+    private static Object parseNumberLiteral(final String raw) {
+        final String s = raw.replace("_", "");
+        final char last = s.charAt(s.length() - 1);
+        final boolean hex = s.regionMatches(true, 0, "0x", 0, 2)
+            || s.regionMatches(true, 1, "0x", 0, 2);
+        final boolean binary = s.regionMatches(true, 0, "0b", 0, 2)
+            || s.regionMatches(true, 1, "0b", 0, 2);
+        final boolean longSuffix = last == 'l' || last == 'L';
+        if (hex || binary) {
+            // radix-prefixed integer literal: strip an optional sign, the 0x/0b prefix and an
+            // optional trailing l/L before parsing, so hex digits d/f/D/F are never mistaken for
+            // a float/double suffix. Parsed unsigned (JLS 3.10.1) then narrowed to int if unsuffixed.
+            final int sign = s.charAt(0) == '-' ? -1 : 1;
+            final int start = (sign < 0 || s.charAt(0) == '+' ? 1 : 0) + 2;
+            final String digits = s.substring(start, longSuffix ? s.length() - 1 : s.length());
+            final long value = sign * Long.parseUnsignedLong(digits, hex ? 16 : 2);
+            return longSuffix ? (Object) value : (Object) (int) value;
+        }
+        if (longSuffix) {
+            return Long.decode(s.substring(0, s.length() - 1));
+        }
+        if (last == 'f' || last == 'F') {
+            return Float.valueOf(s.substring(0, s.length() - 1));
+        }
+        if (last == 'd' || last == 'D') {
+            return Double.valueOf(s.substring(0, s.length() - 1));
+        }
+        if (s.indexOf('.') >= 0 || s.indexOf('e') > 0 || s.indexOf('E') > 0) {
+            return Double.valueOf(s);
+        }
+        try {
+            return Integer.decode(s);
+        } catch (final NumberFormatException e) {
+            return Long.decode(s);
+        }
+    }
+
+    private static String unescapeJavaLiteral(final String s) {
+        if (s.indexOf('\\') < 0) {
+            return s;
+        }
+        final var sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c != '\\') {
+                sb.append(c);
+                continue;
+            }
+            c = s.charAt(++i);
+            switch (c) {
+                case 'n' -> sb.append('\n');
+                case 't' -> sb.append('\t');
+                case 'r' -> sb.append('\r');
+                case 'b' -> sb.append('\b');
+                case 'f' -> sb.append('\f');
+                case 's' -> sb.append(' ');
+                case 'u' -> {
+                    sb.append((char) Integer.parseInt(s.substring(i + 1, i + 5), 16));
+                    i += 4;
+                }
+                case '0', '1', '2', '3', '4', '5', '6', '7' -> {
+                    int octal = c - '0';
+                    final int maxMore = c <= '3' ? 2 : 1;
+                    for (int n = 0; n < maxMore && i + 1 < s.length()
+                        && s.charAt(i + 1) >= '0' && s.charAt(i + 1) <= '7'; n++) {
+                        octal = octal * 8 + (s.charAt(++i) - '0');
+                    }
+                    sb.append((char) octal);
+                }
+                default -> sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     /**

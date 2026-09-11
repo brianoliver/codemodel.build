@@ -25,6 +25,7 @@ import build.base.version.Version;
 import build.codemodel.foundation.CodeModel;
 import build.codemodel.foundation.descriptor.RequiresModuleDescriptor;
 import build.codemodel.foundation.naming.NonCachingNameProvider;
+import build.codemodel.foundation.usage.AnnotationValue;
 import build.codemodel.jdk.descriptor.ExportsDescriptor;
 import build.codemodel.jdk.descriptor.JDKModuleDescriptor;
 import build.codemodel.jdk.descriptor.ModuleModifier;
@@ -294,6 +295,129 @@ class JDKModuleDescriptorTests {
             .map(a -> a.typeName().toString())
             .toList())
             .containsExactly("SomeAnnotation");
+    }
+
+    @Test
+    void parseAnnotationCapturesImplicitStringValue() throws ParseException {
+        final var md = parse("@SomeAnnotation(\"foo\") module com.example { }");
+        final var value = md.annotationClauses().findFirst().orElseThrow()
+            .values().findFirst().orElseThrow();
+        assertThat(value.name().toString()).isEqualTo("value");
+        assertThat(value.value()).isInstanceOf(AnnotationValue.Value.Literal.class);
+        assertThat(((AnnotationValue.Value.Literal) value.value()).value()).isEqualTo("foo");
+    }
+
+    @Test
+    void parseAnnotationCapturesNamedLiteralArguments() throws ParseException {
+        final var md = parse("@Cfg(bar = 1, baz = \"x\", flag = true) module com.example { }");
+        final var values = md.annotationClauses().findFirst().orElseThrow().values().toList();
+        assertThat(values.stream().map(v -> v.name().toString()).toList())
+            .containsExactly("bar", "baz", "flag");
+        assertThat(((AnnotationValue.Value.Literal) values.get(0).value()).value()).isEqualTo(1);
+        assertThat(((AnnotationValue.Value.Literal) values.get(1).value()).value()).isEqualTo("x");
+        assertThat(((AnnotationValue.Value.Literal) values.get(2).value()).value()).isEqualTo(Boolean.TRUE);
+    }
+
+    @Test
+    void parseAnnotationCapturesClassAndEnumArguments() throws ParseException {
+        final var md = parse(
+            "@Cfg(type = java.lang.String.class, policy = java.lang.annotation.RetentionPolicy.RUNTIME) module com.example { }");
+        final var values = md.annotationClauses().findFirst().orElseThrow().values().toList();
+        final var classRef = (AnnotationValue.Value.ClassRef) values.get(0).value();
+        assertThat(classRef.typeName().canonicalName()).isEqualTo("java.lang.String");
+        final var enumConstant = (AnnotationValue.Value.EnumConstant) values.get(1).value();
+        assertThat(enumConstant.typeName().canonicalName()).isEqualTo("java.lang.annotation.RetentionPolicy");
+        assertThat(enumConstant.constantName()).isEqualTo("RUNTIME");
+    }
+
+    @Test
+    void parseAnnotationCapturesArrayArgument() throws ParseException {
+        final var md = parse("@Cfg(names = {\"a\", \"b\", \"c\"}) module com.example { }");
+        final var value = md.annotationClauses().findFirst().orElseThrow()
+            .values().findFirst().orElseThrow().value();
+        final var array = (AnnotationValue.Value.Array) value;
+        assertThat(array.elements().stream()
+            .map(e -> ((AnnotationValue.Value.Literal) e).value())
+            .toList())
+            .containsExactly("a", "b", "c");
+    }
+
+    @Test
+    void parseAnnotationCapturesNestedAnnotationArgument() throws ParseException {
+        final var md = parse("@Outer(inner = @Inner(id = 7)) module com.example { }");
+        final var value = md.annotationClauses().findFirst().orElseThrow()
+            .values().findFirst().orElseThrow().value();
+        final var nested = (AnnotationValue.Value.Nested) value;
+        assertThat(nested.annotation().typeName().toString()).isEqualTo("Inner");
+        final var innerValue = nested.annotation().values().findFirst().orElseThrow();
+        assertThat(innerValue.name().toString()).isEqualTo("id");
+        assertThat(((AnnotationValue.Value.Literal) innerValue.value()).value()).isEqualTo(7);
+    }
+
+    @Test
+    void parseAnnotationCapturesNegativeCharAndBinaryLiterals() throws ParseException {
+        final var md = parse("@Cfg(n = -3, c = 'x', mask = 0b1010) module com.example { }");
+        final var values = md.annotationClauses().findFirst().orElseThrow().values().toList();
+        assertThat(((AnnotationValue.Value.Literal) values.get(0).value()).value()).isEqualTo(-3);
+        assertThat(((AnnotationValue.Value.Literal) values.get(1).value()).value()).isEqualTo('x');
+        assertThat(((AnnotationValue.Value.Literal) values.get(2).value()).value()).isEqualTo(0b1010);
+    }
+
+    @Test
+    void parseAnnotationCapturesArrayOfEnumConstants() throws ParseException {
+        final var md = parse(
+            "@Cfg(policies = {java.lang.annotation.RetentionPolicy.RUNTIME, java.lang.annotation.RetentionPolicy.SOURCE})"
+                + " module com.example { }");
+        final var array = (AnnotationValue.Value.Array) md.annotationClauses().findFirst().orElseThrow()
+            .values().findFirst().orElseThrow().value();
+        assertThat(array.elements().stream()
+            .map(e -> ((AnnotationValue.Value.EnumConstant) e).constantName())
+            .toList())
+            .containsExactly("RUNTIME", "SOURCE");
+    }
+
+    @Test
+    void parseAnnotationCapturesHexAndTypedNumericLiterals() throws ParseException {
+        final var md = parse(
+            "@Cfg(mask = 0xFF, big = 0xCAFEL, count = 5L, ratio = 1.5f, span = 2.5d) module com.example { }");
+        final var values = md.annotationClauses().findFirst().orElseThrow().values().toList();
+        assertThat(((AnnotationValue.Value.Literal) values.get(0).value()).value()).isEqualTo(0xFF);
+        assertThat(((AnnotationValue.Value.Literal) values.get(1).value()).value()).isEqualTo(0xCAFEL);
+        assertThat(((AnnotationValue.Value.Literal) values.get(2).value()).value()).isEqualTo(5L);
+        assertThat(((AnnotationValue.Value.Literal) values.get(3).value()).value()).isEqualTo(1.5f);
+        assertThat(((AnnotationValue.Value.Literal) values.get(4).value()).value()).isEqualTo(2.5d);
+    }
+
+    @Test
+    void parseAnnotationDropsArgumentsOnUnparseableValueShape() throws ParseException {
+        final var md = parse("@Cfg(bad = {1, 2) module com.example { }");
+        final var annotation = md.annotationClauses().findFirst().orElseThrow();
+        assertThat(annotation.typeName().toString()).isEqualTo("Cfg");
+        assertThat(annotation.values().count()).isEqualTo(0);
+    }
+
+    @Test
+    void parseAnnotationDropsAllArgumentsWhenNestedAnnotationValueIsUnparseable() throws ParseException {
+        final var md = parse("@Outer(id = 1, inner = @Inner(bad = {2, 3)) module com.example { }");
+        final var annotation = md.annotationClauses().findFirst().orElseThrow();
+        assertThat(annotation.typeName().toString()).isEqualTo("Outer");
+        assertThat(annotation.values().count()).isEqualTo(0);
+    }
+
+    @Test
+    void parseAnnotationSkipsUnattributableBareIdentifierValue() throws ParseException {
+        final var md = parse("@Cfg(RUNTIME) module com.example { }");
+        final var annotation = md.annotationClauses().findFirst().orElseThrow();
+        assertThat(annotation.typeName().toString()).isEqualTo("Cfg");
+        assertThat(annotation.values().count()).isEqualTo(0);
+    }
+
+    @Test
+    void parseAnnotationDropsArgumentsOnTextBlockValue() throws ParseException {
+        final var md = parse("@Cfg(doc = \"\"\"\ntext\n\"\"\") module com.example { }");
+        final var annotation = md.annotationClauses().findFirst().orElseThrow();
+        assertThat(annotation.typeName().toString()).isEqualTo("Cfg");
+        assertThat(annotation.values().count()).isEqualTo(0);
     }
 
     @Test
