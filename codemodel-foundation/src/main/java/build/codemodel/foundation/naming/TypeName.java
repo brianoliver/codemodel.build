@@ -231,8 +231,8 @@ public final class TypeName
      * @return an {@link TypeName}
      */
     public static TypeName of(final Optional<ModuleName> moduleName,
-                              final Optional<TypeName> enclosingTypeName,
                               final Optional<Namespace> namespace,
+                              final Optional<TypeName> enclosingTypeName,
                               final IrreducibleName irreducibleName) {
 
         return new TypeName(moduleName, namespace, enclosingTypeName, irreducibleName);

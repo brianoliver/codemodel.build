@@ -898,7 +898,7 @@ class TypeUsagesTests {
         final var codeModel = createCodeModel();
 
         final var bogusNamespace = Namespace.of(IrreducibleName.of("bogus")).orElseThrow();
-        final var bogusTypeName = TypeName.of(Optional.empty(), Optional.empty(), Optional.of(bogusNamespace),
+        final var bogusTypeName = TypeName.of(Optional.empty(), Optional.of(bogusNamespace), Optional.empty(),
             IrreducibleName.of("Nonexistent"));
         final var unresolvable = SpecificTypeUsage.of(codeModel, bogusTypeName);
 
