@@ -133,6 +133,6 @@ public class NonCachingNameProvider
                                 final Optional<TypeName> enclosingTypeName,
                                 final IrreducibleName irreducibleName) {
 
-        return TypeName.of(moduleName, enclosingTypeName, namespace, irreducibleName);
+        return TypeName.of(moduleName, namespace, enclosingTypeName, irreducibleName);
     }
 }
