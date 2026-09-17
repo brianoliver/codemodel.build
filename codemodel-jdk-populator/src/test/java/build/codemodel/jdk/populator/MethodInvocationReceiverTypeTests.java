@@ -52,6 +52,7 @@ class MethodInvocationReceiverTypeTests {
         assertThat(invocation.receiverType().get()).isInstanceOf(NamedTypeUsage.class);
         final var receiverTypeName = ((NamedTypeUsage) invocation.receiverType().get()).typeName();
         assertThat(receiverTypeName.name().toString()).isEqualTo("StringBuilder");
+        assertThat(invocation.toString()).isEqualTo("sb.append(\"hello\")");
     }
 
     @Test
@@ -86,6 +87,7 @@ class MethodInvocationReceiverTypeTests {
         assertThat(outerInvocation.receiverType().get()).isInstanceOf(NamedTypeUsage.class);
         final var receiverTypeName = ((NamedTypeUsage) outerInvocation.receiverType().get()).typeName();
         assertThat(receiverTypeName.name().toString()).isEqualTo("String");
+        assertThat(outerInvocation.toString()).isEqualTo("sb.toString().length()");
     }
 
     @Test
@@ -120,6 +122,7 @@ class MethodInvocationReceiverTypeTests {
         assertThat(invocation.receiverType().get()).isInstanceOf(NamedTypeUsage.class);
         final var receiverTypeName = ((NamedTypeUsage) invocation.receiverType().get()).typeName();
         assertThat(receiverTypeName.name().toString()).isEqualTo("Caller");
+        assertThat(invocation.toString()).isEqualTo("bar()");
     }
 
     @Test
@@ -161,5 +164,6 @@ class MethodInvocationReceiverTypeTests {
         assertThat(invocation.receiverType().get()).isInstanceOf(NamedTypeUsage.class);
         final var receiverTypeName = ((NamedTypeUsage) invocation.receiverType().get()).typeName();
         assertThat(receiverTypeName.name().toString()).isEqualTo("Inner");
+        assertThat(invocation.toString()).isEqualTo("helper()");
     }
 }

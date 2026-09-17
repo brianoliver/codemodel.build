@@ -116,6 +116,11 @@ public class StringLiteral
         return Objects.equals(this.value(), stringLiteral.value()) && Objects.equals(this.type(), stringLiteral.type());
     }
 
+    @Override
+    public String toString() {
+        return "\"" + this.value() + "\"";
+    }
+
     static {
         Marshalling.register(StringLiteral.class, MethodHandles.lookup());
     }

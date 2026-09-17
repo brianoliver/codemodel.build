@@ -159,6 +159,11 @@ public class Literal<T>
         return type.stream();
     }
 
+    @Override
+    public String toString() {
+        return String.valueOf(this.value);
+    }
+
     /**
      * Creates a {@link Literal}.
      *

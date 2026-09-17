@@ -31,6 +31,8 @@ import build.codemodel.jdk.expression.ArrayDimensionOrder;
 import build.codemodel.jdk.expression.AssignmentOperator;
 import build.codemodel.jdk.expression.BitwiseBinary;
 import build.codemodel.jdk.expression.BitwiseOperator;
+import build.codemodel.jdk.expression.CharLiteral;
+import build.codemodel.jdk.expression.ClassLiteral;
 import build.codemodel.jdk.expression.CompoundAssignment;
 import build.codemodel.jdk.expression.Identifier;
 import build.codemodel.jdk.expression.InstanceOf;
@@ -38,6 +40,7 @@ import build.codemodel.jdk.expression.MethodInvocation;
 import build.codemodel.jdk.expression.MethodReference;
 import build.codemodel.jdk.expression.NewArray;
 import build.codemodel.jdk.expression.NewObject;
+import build.codemodel.jdk.expression.NullLiteral;
 import build.codemodel.jdk.expression.PostfixOperator;
 import build.codemodel.jdk.expression.PostfixUnary;
 import build.codemodel.jdk.expression.PrefixOperator;
@@ -90,6 +93,7 @@ class ExpressionCaptureFidelityTests {
         assertThat(cast.targetType()).isInstanceOf(NamedTypeUsage.class);
         assertThat(((NamedTypeUsage) cast.targetType()).typeName().canonicalName())
             .isEqualTo("java.lang.String");
+        assertThat(cast.expression().toString()).isEqualTo("obj");
     }
 
     @Test
@@ -186,6 +190,7 @@ class ExpressionCaptureFidelityTests {
         assertThat(witnesses.getFirst().getTrait(SourceLocation.FilePosition.class))
             .as("each type witness carries its own source position")
             .isPresent();
+        assertThat(invocation.toString()).isEqualTo("Collections.<java.lang.String>emptyList()");
     }
 
     @Test
@@ -216,6 +221,7 @@ class ExpressionCaptureFidelityTests {
             .containsExactly("java.lang.String", "java.lang.Integer");
         assertThat(witnesses).allSatisfy(w ->
             assertThat(w.getTrait(SourceLocation.FilePosition.class)).isPresent());
+        assertThat(invocation.toString()).isEqualTo("Map.<java.lang.String, java.lang.Integer>entry(\"a\", 1)");
     }
 
     @Test
@@ -650,6 +656,55 @@ class ExpressionCaptureFidelityTests {
     }
 
     @Test
+    void shouldCaptureCharLiteral() {
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.Grader", """
+                package build.codemodel.jdk.example;
+                public class Grader {
+                    public char topGrade() {
+                        return 'a';
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.Grader");
+        final var literal = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(CharLiteral.class)
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(literal.value()).isEqualTo('a');
+        assertThat(literal.toString()).isEqualTo("'a'");
+    }
+
+    @Test
+    void shouldCaptureNullLiteral() {
+        final var source = JavaFileObjects.forSourceString(
+            "build.codemodel.jdk.example.Empties", """
+                package build.codemodel.jdk.example;
+                public class Empties {
+                    public String empty() {
+                        return null;
+                    }
+                }
+                """);
+
+        final var codeModel = JdkInitializerTests.runInternal(
+            new JdkInitializer(List.of(), List.of(), List.of(source)));
+
+        final var typeName = codeModel.getEmptyModuleTypeName("build.codemodel.jdk.example.Empties");
+        final var literal = codeModel.getTypeDescriptor(typeName).orElseThrow()
+            .composition(NullLiteral.class)
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(literal.toString()).isEqualTo("null");
+    }
+
+    @Test
     void shouldCaptureQualifiedInstanceCreationOuterInstance() {
         final var source = JavaFileObjects.forSourceString(
             "build.codemodel.jdk.example.Outer", """
@@ -792,9 +847,10 @@ class ExpressionCaptureFidelityTests {
         final var returnExpr = ((Return) body.statements().findFirst().orElseThrow())
             .expression().orElseThrow();
 
-        assertThat(returnExpr).isInstanceOf(build.codemodel.jdk.expression.ClassLiteral.class);
-        final var literal = (build.codemodel.jdk.expression.ClassLiteral) returnExpr;
+        assertThat(returnExpr).isInstanceOf(ClassLiteral.class);
+        final var literal = (ClassLiteral) returnExpr;
         assertThat(((NamedTypeUsage) literal.referencedType()).typeName().toString()).contains("String");
+        assertThat(literal.toString()).isEqualTo("java.lang.String.class");
     }
 
     @Test
@@ -866,7 +922,8 @@ class ExpressionCaptureFidelityTests {
 
         assertThat(intReturn)
             .as("int.class should be a ClassLiteral, not a FieldAccess")
-            .isInstanceOf(build.codemodel.jdk.expression.ClassLiteral.class);
+            .isInstanceOf(ClassLiteral.class);
+        assertThat(intReturn.toString()).isEqualTo("int.class");
 
         final var voidClassBody = descriptor.traits(MethodDescriptor.class)
             .filter(m -> m.methodName().name().toString().equals("voidClass"))
@@ -877,6 +934,7 @@ class ExpressionCaptureFidelityTests {
 
         assertThat(voidReturn)
             .as("void.class should be a ClassLiteral, not a FieldAccess")
-            .isInstanceOf(build.codemodel.jdk.expression.ClassLiteral.class);
+            .isInstanceOf(ClassLiteral.class);
+        assertThat(voidReturn.toString()).isEqualTo("void.class");
     }
 }

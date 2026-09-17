@@ -249,6 +249,7 @@ class ExpressionTypeResolutionTests {
         final var expectedStart = source.indexOf("sb.length;");
         assertThat(location.startPosition()).isEqualTo(expectedStart);
         assertThat(location.endPosition()).isEqualTo(expectedStart + "sb.length".length());
+        assertThat(fieldAccess.toString()).isEqualTo("sb.length");
     }
 
     @Test

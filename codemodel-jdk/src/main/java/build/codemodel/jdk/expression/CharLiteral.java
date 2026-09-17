@@ -87,6 +87,11 @@ public final class CharLiteral
             && super.equals(other);
     }
 
+    @Override
+    public String toString() {
+        return "'" + this.value + "'";
+    }
+
     /**
      * Creates a {@link CharLiteral} expression.
      *

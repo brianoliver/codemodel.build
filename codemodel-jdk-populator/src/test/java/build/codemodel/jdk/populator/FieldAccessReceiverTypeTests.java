@@ -58,6 +58,7 @@ class FieldAccessReceiverTypeTests {
         assertThat(access.receiverType().get()).isInstanceOf(NamedTypeUsage.class);
         final var receiverTypeName = ((NamedTypeUsage) access.receiverType().get()).typeName();
         assertThat(receiverTypeName.name().toString()).isEqualTo("Item");
+        assertThat(access.toString()).isEqualTo("item.value");
     }
 
     @Test
@@ -93,5 +94,6 @@ class FieldAccessReceiverTypeTests {
         assertThat(access.receiverType().get()).isInstanceOf(NamedTypeUsage.class);
         final var receiverTypeName = ((NamedTypeUsage) access.receiverType().get()).typeName();
         assertThat(receiverTypeName.name().toString()).isEqualTo("Wrapper");
+        assertThat(access.toString()).isEqualTo("Wrapper.forString(s).length");
     }
 }

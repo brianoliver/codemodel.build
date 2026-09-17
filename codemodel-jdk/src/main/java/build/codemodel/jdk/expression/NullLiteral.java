@@ -66,6 +66,11 @@ public final class NullLiteral
         return object instanceof NullLiteral && super.equals(object);
     }
 
+    @Override
+    public String toString() {
+        return "null";
+    }
+
     /**
      * Creates a {@link NullLiteral} expression.
      *
