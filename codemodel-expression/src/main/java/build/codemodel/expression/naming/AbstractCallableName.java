@@ -20,11 +20,9 @@ package build.codemodel.expression.naming;
  * #L%
  */
 
-import build.base.marshalling.Bound;
 import build.base.marshalling.Marshal;
 import build.base.marshalling.Marshaller;
 import build.base.marshalling.Out;
-import build.codemodel.foundation.CodeModel;
 import build.codemodel.foundation.naming.CallableName;
 import build.codemodel.foundation.naming.IrreducibleName;
 import build.codemodel.foundation.naming.ModuleName;
@@ -106,7 +104,6 @@ public abstract class AbstractCallableName
     /**
      * Un{@link Marshal} an {@link AbstractCallableName}.
      *
-     * @param codeModel       the {@link CodeModel}
      * @param marshaller      the {@link Marshaller}
      * @param moduleName      the {@link Optional} {@link ModuleName}
      * @param namespace       the {@link Optional} {@link Namespace}
@@ -114,8 +111,7 @@ public abstract class AbstractCallableName
      * @param irreducibleName the {@link IrreducibleName} for the {@link AbstractCallableName}
      * @param string          the {@link String} representation of the {@link AbstractCallableName}
      */
-    protected AbstractCallableName(@Bound final CodeModel codeModel,
-                                   final Marshaller marshaller,
+    protected AbstractCallableName(final Marshaller marshaller,
                                    final Optional<ModuleName> moduleName,
                                    final Optional<Namespace> namespace,
                                    final Optional<TypeName> typeName,
