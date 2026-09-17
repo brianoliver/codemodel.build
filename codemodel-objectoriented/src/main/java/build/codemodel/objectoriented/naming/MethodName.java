@@ -20,7 +20,6 @@ package build.codemodel.objectoriented.naming;
  * #L%
  */
 
-import build.base.marshalling.Bound;
 import build.base.marshalling.Marshal;
 import build.base.marshalling.Marshaller;
 import build.base.marshalling.Marshalling;
@@ -28,7 +27,6 @@ import build.base.marshalling.Out;
 import build.base.marshalling.Unmarshal;
 import build.codemodel.expression.naming.AbstractCallableName;
 import build.codemodel.expression.naming.FunctionName;
-import build.codemodel.foundation.CodeModel;
 import build.codemodel.foundation.naming.CallableName;
 import build.codemodel.foundation.naming.IrreducibleName;
 import build.codemodel.foundation.naming.ModuleName;
@@ -66,7 +64,6 @@ public class MethodName
     /**
      * {@link Unmarshal} a {@link MethodName}.
      *
-     * @param codeModel       the {@link CodeModel}
      * @param marshaller      the {@link Marshaller}
      * @param moduleName      the {@link Optional} {@link ModuleName}
      * @param namespace       the {@link Optional} {@link Namespace}
@@ -75,15 +72,14 @@ public class MethodName
      * @param string          the {@link String} representation of the {@link MethodName}
      */
     @Unmarshal
-    public MethodName(@Bound final CodeModel codeModel,
-                      final Marshaller marshaller,
+    public MethodName(final Marshaller marshaller,
                       final Optional<ModuleName> moduleName,
                       final Optional<Namespace> namespace,
                       final Optional<TypeName> typeName,
                       final IrreducibleName irreducibleName,
                       final String string) {
 
-        super(codeModel, marshaller, moduleName, namespace, typeName, irreducibleName, string);
+        super(marshaller, moduleName, namespace, typeName, irreducibleName, string);
     }
 
     /**

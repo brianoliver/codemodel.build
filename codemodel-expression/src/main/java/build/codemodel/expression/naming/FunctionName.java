@@ -20,13 +20,11 @@ package build.codemodel.expression.naming;
  * #L%
  */
 
-import build.base.marshalling.Bound;
 import build.base.marshalling.Marshal;
 import build.base.marshalling.Marshaller;
 import build.base.marshalling.Marshalling;
 import build.base.marshalling.Out;
 import build.base.marshalling.Unmarshal;
-import build.codemodel.foundation.CodeModel;
 import build.codemodel.foundation.descriptor.CallableDescriptor;
 import build.codemodel.foundation.naming.CallableName;
 import build.codemodel.foundation.naming.IrreducibleName;
@@ -66,7 +64,6 @@ public final class FunctionName
     /**
      * Un{@link Marshal} an {@link FunctionName}.
      *
-     * @param codeModel       the {@link CodeModel}
      * @param marshaller      the {@link Marshaller}
      * @param moduleName      the {@link Optional} {@link ModuleName}
      * @param namespace       the {@link Optional} {@link Namespace}
@@ -75,15 +72,14 @@ public final class FunctionName
      * @param string          the {@link String} representation of the {@link FunctionName}
      */
     @Unmarshal
-    public FunctionName(@Bound final CodeModel codeModel,
-                        final Marshaller marshaller,
+    public FunctionName(final Marshaller marshaller,
                         final Optional<ModuleName> moduleName,
                         final Optional<Namespace> namespace,
                         final Optional<TypeName> typeName,
                         final IrreducibleName irreducibleName,
                         final String string) {
 
-        super(codeModel, marshaller, moduleName, namespace, typeName, irreducibleName, string);
+        super(marshaller, moduleName, namespace, typeName, irreducibleName, string);
     }
 
     /**
