@@ -87,6 +87,11 @@ public final class ClassLiteral
             && super.equals(other);
     }
 
+    @Override
+    public String toString() {
+        return this.referencedType.canonicalName() + ".class";
+    }
+
     public static ClassLiteral of(final CodeModel codeModel, final TypeUsage referencedType) {
         return new ClassLiteral(codeModel, referencedType);
     }

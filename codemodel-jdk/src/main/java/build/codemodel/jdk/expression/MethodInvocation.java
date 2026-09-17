@@ -199,6 +199,22 @@ public final class MethodInvocation
             && super.equals(other);
     }
 
+    @Override
+    public String toString() {
+        final StringBuilder builder = new StringBuilder();
+        this.target.ifPresent(receiver -> builder.append(receiver).append('.'));
+        if (!this.typeWitnesses.isEmpty()) {
+            builder.append('<')
+                .append(this.typeWitnesses.stream().map(TypeUsage::canonicalName).collect(Collectors.joining(", ")))
+                .append('>');
+        }
+        builder.append(this.methodName)
+            .append('(')
+            .append(this.args.stream().map(String::valueOf).collect(Collectors.joining(", ")))
+            .append(')');
+        return builder.toString();
+    }
+
     /**
      * Creates a {@link MethodInvocation} expression with no explicit type witnesses.
      *

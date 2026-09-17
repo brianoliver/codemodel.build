@@ -87,6 +87,11 @@ public final class Identifier
             && super.equals(other);
     }
 
+    @Override
+    public String toString() {
+        return this.name;
+    }
+
     /**
      * Creates an {@link Identifier} expression.
      *

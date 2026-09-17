@@ -138,6 +138,11 @@ public final class FieldAccess
             && super.equals(other);
     }
 
+    @Override
+    public String toString() {
+        return this.target + "." + this.fieldName;
+    }
+
     /**
      * Creates a {@link FieldAccess} expression.
      *
