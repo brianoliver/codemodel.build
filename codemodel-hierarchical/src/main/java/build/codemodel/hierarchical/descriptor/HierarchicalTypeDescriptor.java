@@ -150,8 +150,7 @@ public interface HierarchicalTypeDescriptor
     }
 
     /**
-     * Obtains the set of {@link TypeName}s of the <i>ancestor</i> types, in order of nearest-most parent type to the
-     * further-est <i>ancestor</i> type.
+     * Obtains the set of {@link TypeName}s of the <i>ancestor</i> types.
      *
      * @return a {@link Stream} of the {@link TypeName}s of the <i>ancestor</i> types
      * @throws IllegalStateException when a {@link HierarchicalTypeDescriptor} for an <i>ancestor</i> can't be obtained
@@ -361,8 +360,7 @@ public interface HierarchicalTypeDescriptor
     }
 
     /**
-     * Obtains the set of {@link TypeName}s of the <i>descendant</i> types, in order of nearest-most child type to the
-     * further-est <i>descendant</i> type.
+     * Obtains the set of {@link TypeName}s of the <i>descendant</i> types.
      *
      * @return a {@link Stream} of the {@link TypeName}s of the <i>descendant</i> types
      * @throws IllegalStateException when a {@link HierarchicalTypeDescriptor} for a <i>descendant</i> can't be obtained

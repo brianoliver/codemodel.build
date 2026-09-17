@@ -34,8 +34,8 @@ import build.codemodel.foundation.naming.TypeName;
 import build.codemodel.hierarchical.descriptor.HierarchicalTypeDescriptor;
 import build.codemodel.hierarchical.descriptor.ParentTypeDescriptor;
 
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.stream.Stream;
 
 /**
@@ -52,27 +52,28 @@ public abstract class AbstractHierarchicalCodeModel
      * The <i>parent</i> {@link TypeName}s for which one or more <i>child</i> {@link HierarchicalTypeDescriptor}s
      * require them, but as yet the {@link HierarchicalTypeDescriptor} for the said <i>parent</i> is unknown.
      * <p>
-     * The set values are {@link CopyOnWriteArraySet}s: a shared {@link HierarchicalCodeModel} is populated from
-     * multiple threads (e.g. concurrent {@code spin} module compiles), so {@link #children(HierarchicalTypeDescriptor)}
-     * / {@link #parents(HierarchicalTypeDescriptor)} can stream a set while another thread is adding an edge to it.
-     * {@link CopyOnWriteArraySet} gives those readers a stable, insertion-ordered snapshot with no synchronization
-     * instead of a {@link java.util.ConcurrentModificationException}.
+     * The set values are concurrent sets (see {@link ConcurrentHashMap#newKeySet()}): a shared
+     * {@link HierarchicalCodeModel} is populated from multiple threads (e.g. concurrent {@code spin} module
+     * compiles), so {@link #children(HierarchicalTypeDescriptor)} / {@link #parents(HierarchicalTypeDescriptor)}
+     * can stream a set while another thread is adding an edge to it. These sets give those readers a weakly
+     * consistent iterator with no synchronization instead of a {@link java.util.ConcurrentModificationException},
+     * but do <strong>not</strong> preserve insertion order.
      */
-    private ConcurrentHashMap<TypeName, CopyOnWriteArraySet<HierarchicalTypeDescriptor>> orphanedChildren;
+    private ConcurrentHashMap<TypeName, Set<HierarchicalTypeDescriptor>> orphanedChildren;
 
     /**
      * The <i>parent</i> {@link HierarchicalTypeDescriptor}s by <i>child</i> {@link HierarchicalTypeDescriptor}.
      * <p>
-     * See {@link #orphanedChildren} for why the set values are {@link CopyOnWriteArraySet}s.
+     * See {@link #orphanedChildren} for why the set values are concurrent, unordered sets.
      */
-    private ConcurrentHashMap<HierarchicalTypeDescriptor, CopyOnWriteArraySet<HierarchicalTypeDescriptor>> parents;
+    private ConcurrentHashMap<HierarchicalTypeDescriptor, Set<HierarchicalTypeDescriptor>> parents;
 
     /**
      * The <i>child</i> {@link HierarchicalTypeDescriptor}s by <i>parents</i> {@link HierarchicalTypeDescriptor}.
      * <p>
-     * See {@link #orphanedChildren} for why the set values are {@link CopyOnWriteArraySet}s.
+     * See {@link #orphanedChildren} for why the set values are concurrent, unordered sets.
      */
-    private ConcurrentHashMap<HierarchicalTypeDescriptor, CopyOnWriteArraySet<HierarchicalTypeDescriptor>> children;
+    private ConcurrentHashMap<HierarchicalTypeDescriptor, Set<HierarchicalTypeDescriptor>> children;
 
     /**
      * Constructs an empty {@link AbstractHierarchicalCodeModel}.
@@ -218,21 +219,22 @@ public abstract class AbstractHierarchicalCodeModel
     }
 
     /**
-     * Adds {@code element} to the set stored under {@code key}, creating the {@link CopyOnWriteArraySet} on first use.
-     * The get-or-create and the {@code add} happen inside a single {@link ConcurrentHashMap#compute} so a concurrent
-     * {@link #removeEdge} on the same key can't drop the entry between them.
+     * Adds {@code element} to the set stored under {@code key}, creating the set (via
+     * {@link ConcurrentHashMap#newKeySet()}) on first use. The get-or-create and the {@code add} happen inside a
+     * single {@link ConcurrentHashMap#compute} so a concurrent {@link #removeEdge} on the same key can't drop the
+     * entry between them.
      *
      * @param map     the map to mutate
      * @param key     the key whose set {@code element} is added to
      * @param element the element to add
      * @param <K>     the key type
      */
-    private static <K> void addEdge(final ConcurrentHashMap<K, CopyOnWriteArraySet<HierarchicalTypeDescriptor>> map,
+    private static <K> void addEdge(final ConcurrentHashMap<K, Set<HierarchicalTypeDescriptor>> map,
                                     final K key,
                                     final HierarchicalTypeDescriptor element) {
 
         map.compute(key, (_, existing) -> {
-            final var set = existing == null ? new CopyOnWriteArraySet<HierarchicalTypeDescriptor>() : existing;
+            final var set = existing == null ? ConcurrentHashMap.<HierarchicalTypeDescriptor>newKeySet() : existing;
             set.add(element);
             return set;
         });
@@ -248,7 +250,7 @@ public abstract class AbstractHierarchicalCodeModel
      * @param element the element to remove
      * @param <K>     the key type
      */
-    private static <K> void removeEdge(final ConcurrentHashMap<K, CopyOnWriteArraySet<HierarchicalTypeDescriptor>> map,
+    private static <K> void removeEdge(final ConcurrentHashMap<K, Set<HierarchicalTypeDescriptor>> map,
                                        final K key,
                                        final HierarchicalTypeDescriptor element) {
 
