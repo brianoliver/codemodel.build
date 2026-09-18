@@ -105,6 +105,39 @@ class CodeModelTraitable
         return this.codeModel;
     }
 
+    /**
+     * Notifies the {@link #object} (when it's {@link TraitAware}) and indexes a {@link Trait} that was just added.
+     * <p>
+     * Must only be called outside of any {@link ConcurrentHashMap#compute} remapping function, so that arbitrary
+     * {@link TraitAware} and index work never runs while a {@link ConcurrentHashMap} bin lock is held.
+     *
+     * @param trait the {@link Trait} that was added
+     */
+    private void notifyAdded(final Trait trait) {
+        if (this.object instanceof TraitAware traitAware) {
+            traitAware.onAddedTrait(trait);
+        }
+
+        this.codeModel.index().index(trait);
+    }
+
+    /**
+     * Unindexes and notifies the {@link #object} (when it's {@link TraitAware}) of a {@link Trait} that was just
+     * removed.
+     * <p>
+     * Must only be called outside of any {@link ConcurrentHashMap#compute} remapping function, so that arbitrary
+     * {@link TraitAware} and index work never runs while a {@link ConcurrentHashMap} bin lock is held.
+     *
+     * @param trait the {@link Trait} that was removed
+     */
+    private void notifyRemoved(final Trait trait) {
+        this.codeModel.index().unindex(trait);
+
+        if (this.object instanceof TraitAware traitAware) {
+            traitAware.onRemovedTrait(trait);
+        }
+    }
+
     @Override
     @SuppressWarnings("unchecked")
     public <T> Iterator<T> iterator(final Class<T> type) {
@@ -152,36 +185,26 @@ class CodeModelTraitable
         final var registrationClass = getRegistrationClass(trait.getClass());
 
         if (isSingular(registrationClass)) {
-            this.singularTraitsByClass.compute(registrationClass, (_, existing) -> {
-                if (existing != null) {
-                    throw new IllegalArgumentException("Trait [" + trait.getClass()
-                        + "] with registration type [" + registrationClass + "] already exists");
-                }
+            final var previous = this.singularTraitsByClass.putIfAbsent(registrationClass, trait);
+            if (previous != null) {
+                throw new IllegalArgumentException("Trait [" + trait.getClass()
+                    + "] with registration type [" + registrationClass + "] already exists");
+            }
 
-                if (this.object instanceof TraitAware traitAware) {
-                    traitAware.onAddedTrait(trait);
-                }
-
-                this.codeModel.index().index(trait);
-                return trait;
-            });
+            notifyAdded(trait);
         } else {
+            final var added = Lazy.<Trait>empty();
             this.traitsByClass.compute(registrationClass, (_, existing) -> {
                 final var list = existing == null ? ConcurrentHashMap.<Trait>newKeySet() : existing;
 
                 // add if the trait is not already present
-                if (!list.contains(trait)) {
-                    list.add(trait);
-
-                    if (this.object instanceof TraitAware traitAware) {
-                        traitAware.onAddedTrait(trait);
-                    }
-
-                    this.codeModel.index().index(trait);
+                if (list.add(trait)) {
+                    added.set(trait);
                 }
 
                 return list;
             });
+            added.ifPresent(this::notifyAdded);
         }
 
         this.codeModel.index().reindexDynamic(this.object);
@@ -194,26 +217,19 @@ class CodeModelTraitable
             return false;
         }
 
-        final var removed = Lazy.<Boolean>empty();
+        final var removedTrait = Lazy.<T>empty();
 
         final var registrationClass = getRegistrationClass(trait.getClass());
 
         if (isSingular(registrationClass)) {
             this.singularTraitsByClass.compute(registrationClass, (_, existing) -> {
                 if (existing == null) {
-                    removed.set(false);
                     return null;
                 }
 
                 // ensure the existing is the same!
                 if (trait == existing) {
-                    this.codeModel.index().unindex(existing);
-
-                    if (this.object instanceof TraitAware traitAware) {
-                        traitAware.onRemovedTrait(existing);
-                    }
-
-                    removed.set(true);
+                    removedTrait.set(trait);
                     return null;
                 } else {
                     return existing;
@@ -222,27 +238,21 @@ class CodeModelTraitable
         } else {
             this.traitsByClass.compute(registrationClass, (_, existing) -> {
                 if (existing == null) {
-                    removed.set(false);
                     return null;
                 }
 
                 if (existing.remove(trait)) {
-                    this.codeModel.index().unindex(trait);
-
-                    if (this.object instanceof TraitAware traitAware) {
-                        traitAware.onRemovedTrait(trait);
-                    }
-                    removed.set(true);
-                } else {
-                    removed.set(false);
+                    removedTrait.set(trait);
                 }
 
                 return existing.isEmpty() ? null : existing;
             });
         }
 
+        removedTrait.ifPresent(this::notifyRemoved);
+
         this.codeModel.index().reindexDynamic(this.object);
-        return removed.get();
+        return removedTrait.isPresent();
     }
 
     @Override
@@ -256,6 +266,7 @@ class CodeModelTraitable
         final var traitable = (C) this.object;
         final var lazyTrait = Lazy.<T>empty();
         final var registrationClass = getRegistrationClass(traitClass);
+        final var created = Lazy.<T>empty();
 
         if (isSingular(registrationClass)) {
             this.singularTraitsByClass.compute(registrationClass, (_, existing) -> {
@@ -267,12 +278,8 @@ class CodeModelTraitable
                     }
 
                     lazyTrait.set(newTrait);
+                    created.set(newTrait);
 
-                    if (this.object instanceof TraitAware traitAware) {
-                        traitAware.onAddedTrait(newTrait);
-                    }
-
-                    this.codeModel.index().index(newTrait);
                     return newTrait;
                 } else {
                     lazyTrait.set((T) existing);
@@ -292,12 +299,7 @@ class CodeModelTraitable
                     final var list = ConcurrentHashMap.<Trait>newKeySet();
                     list.add(trait);
                     lazyTrait.set(trait);
-
-                    if (this.object instanceof TraitAware traitAware) {
-                        traitAware.onAddedTrait(trait);
-                    }
-
-                    this.codeModel.index().index(trait);
+                    created.set(trait);
 
                     return list;
                 }
@@ -312,6 +314,8 @@ class CodeModelTraitable
                         + registrationClass + "], but there are " + existing.size());
             });
         }
+
+        created.ifPresent(this::notifyAdded);
 
         this.codeModel.index().reindexDynamic(this.object);
         return lazyTrait.optional();
@@ -329,31 +333,23 @@ class CodeModelTraitable
         final var lazyTrait = Lazy.<T>empty();
         final var registrationClass = getRegistrationClass(traitClass);
 
+        final var removedTrait = Lazy.<T>empty();
+        final var addedTrait = Lazy.<T>empty();
+
         if (isSingular(registrationClass)) {
             this.singularTraitsByClass.compute(registrationClass, (_, existing) -> {
                 if (existing == null) {
                     return null;
                 }
 
-                this.codeModel.index().unindex(existing);
-
                 final var newTrait = biFunction.apply(traitable, (T) existing);
+
+                removedTrait.set((T) existing);
 
                 if (newTrait != null) {
                     lazyTrait.set(newTrait);
+                    addedTrait.set(newTrait);
                 }
-
-                if (this.object instanceof TraitAware traitAware) {
-                    traitAware.onRemovedTrait(existing);
-
-                    if (newTrait == null) {
-                        return null;
-                    }
-
-                    traitAware.onAddedTrait(newTrait);
-                }
-
-                lazyTrait.ifPresent(this.codeModel.index()::index);
 
                 return newTrait;
             });
@@ -370,32 +366,23 @@ class CodeModelTraitable
                 }
 
                 final var existingTrait = existing.iterator().next();
-                this.codeModel.index().unindex(existingTrait);
-
                 final var replacementTrait = biFunction.apply(traitable, (T) existingTrait);
 
-                if (replacementTrait != null) {
-                    lazyTrait.set(replacementTrait);
-                }
-
-                if (this.object instanceof TraitAware traitAware) {
-                    traitAware.onRemovedTrait(existingTrait);
-
-                    if (replacementTrait == null) {
-                        return null;
-                    }
-
-                    traitAware.onAddedTrait(replacementTrait);
-                }
-
-                // replace the first trait
+                removedTrait.set((T) existingTrait);
                 existing.remove(existingTrait);
-                existing.add(replacementTrait);
-                lazyTrait.ifPresent(this.codeModel.index()::index);
 
-                return existing;
+                if (replacementTrait != null) {
+                    existing.add(replacementTrait);
+                    lazyTrait.set(replacementTrait);
+                    addedTrait.set(replacementTrait);
+                }
+
+                return existing.isEmpty() ? null : existing;
             });
         }
+
+        removedTrait.ifPresent(this::notifyRemoved);
+        addedTrait.ifPresent(this::notifyAdded);
 
         this.codeModel.index().reindexDynamic(this.object);
         return lazyTrait.optional();
