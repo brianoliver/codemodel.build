@@ -92,16 +92,16 @@ public class WildcardTypeUsage
      * @param marshaller the {@link Marshaller} for unmarshalling the {@link Marshalled} {@link Trait}s
      * @param typeName   the {@link TypeName}
      * @param traits     the {@link Marshalled} {@link Trait}s
-     * @param lowerBound the {@link Optional} lower-bound {@link TypeUsage} (from {@code ? super T})
-     * @param upperBound the {@link Optional} upper-bound {@link TypeUsage} (from {@code ? extends T})
+     * @param lowerBound the {@link Optional} {@link Lazy} lower-bound {@link TypeUsage} (from {@code ? super T})
+     * @param upperBound the {@link Optional} {@link Lazy} upper-bound {@link TypeUsage} (from {@code ? extends T})
      */
     @Unmarshal
     public WildcardTypeUsage(@Bound final CodeModel codeModel,
                              final Marshaller marshaller,
                              final TypeName typeName,
                              final Stream<Marshalled<Trait>> traits,
-                             final Optional<TypeUsage> lowerBound,
-                             final Optional<TypeUsage> upperBound) {
+                             final Optional<Lazy<TypeUsage>> lowerBound,
+                             final Optional<Lazy<TypeUsage>> upperBound) {
 
         super(codeModel, marshaller, typeName, traits, lowerBound, upperBound);
     }

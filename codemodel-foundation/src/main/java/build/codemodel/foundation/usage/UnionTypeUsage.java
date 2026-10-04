@@ -78,17 +78,17 @@ public class UnionTypeUsage
      * @param codeModel  the {@link CodeModel}
      * @param marshaller the {@link Marshaller} for unmarshalling the {@link Marshalled} {@link Trait}s
      * @param traits     the {@link Marshalled} {@link Trait}s
-     * @param types      the {@link TypeUsage}s
+     * @param types      the {@link Lazy} {@link TypeUsage}s
      */
     @Unmarshal
     public UnionTypeUsage(@Bound final CodeModel codeModel,
                           final Marshaller marshaller,
                           final Stream<Marshalled<Trait>> traits,
-                          final Stream<TypeUsage> types) {
+                          final Stream<Lazy<TypeUsage>> types) {
 
         super(codeModel, marshaller, traits);
 
-        this.types = types.map(Lazy::of)
+        this.types = types
             .collect(Collectors.toCollection(ArrayList::new));
     }
 
@@ -105,7 +105,6 @@ public class UnionTypeUsage
                            final Out<Stream<TypeUsage>> types) {
 
         super.destructor(marshaller, traits);
-        ;
 
         types.set(this.types.stream()
             .map(Lazy::get));
