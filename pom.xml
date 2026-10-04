@@ -57,7 +57,7 @@
 
     <properties>
         <!-- Project and Module Versions -->
-        <revision>0.29.0</revision>
+        <revision>0.29.1-SNAPSHOT</revision>
 
         <!-- Project Build Properties -->
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
