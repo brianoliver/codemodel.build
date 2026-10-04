@@ -88,21 +88,21 @@ public class TypeVariableUsage
      * @param marshaller the {@link Marshaller} for unmarshalling the {@link Marshalled} {@link Trait}s
      * @param typeName   the {@link TypeName}
      * @param traits     the {@link Marshalled} {@link Trait}s
-     * @param lowerBound the {@link Optional} {@link TypeUsage} of the <i>lower-bound</i>
-     * @param upperBound the {@link Optional} {@link TypeUsage} of the <i>upper-bound</i>
+     * @param lowerBound the {@link Optional} {@link Lazy} {@link TypeUsage} of the <i>lower-bound</i>
+     * @param upperBound the {@link Optional} {@link Lazy} {@link TypeUsage} of the <i>upper-bound</i>
      */
     @Unmarshal
     public TypeVariableUsage(@Bound final CodeModel codeModel,
                              final Marshaller marshaller,
                              final TypeName typeName,
                              final Stream<Marshalled<Trait>> traits,
-                             final Optional<TypeUsage> lowerBound,
-                             final Optional<TypeUsage> upperBound) {
+                             final Optional<Lazy<TypeUsage>> lowerBound,
+                             final Optional<Lazy<TypeUsage>> upperBound) {
 
         super(codeModel, marshaller, typeName, traits);
 
-        this.lowerBound = lowerBound.map(Lazy::of);
-        this.upperBound = upperBound.map(Lazy::of);
+        this.lowerBound = lowerBound;
+        this.upperBound = upperBound;
     }
 
     /**

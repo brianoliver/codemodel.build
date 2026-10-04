@@ -82,18 +82,18 @@ public class GenericTypeUsage
      * @param marshaller the {@link Marshaller} for unmarshalling the {@link Marshalled} {@link Trait}s
      * @param typeName   the {@link TypeName}
      * @param traits     the {@link Marshalled} {@link Trait}s
-     * @param parameters the {@link TypeUsage}s
+     * @param parameters the {@link Lazy} {@link TypeUsage}s
      */
     @Unmarshal
     public GenericTypeUsage(@Bound final CodeModel codeModel,
                             final Marshaller marshaller,
                             final TypeName typeName,
                             final Stream<Marshalled<Trait>> traits,
-                            final Stream<TypeUsage> parameters) {
+                            final Stream<Lazy<TypeUsage>> parameters) {
 
         super(codeModel, marshaller, typeName, traits);
 
-        this.parameters = parameters.map(Lazy::of)
+        this.parameters = parameters
             .collect(Collectors.toCollection(ArrayList::new));
     }
 

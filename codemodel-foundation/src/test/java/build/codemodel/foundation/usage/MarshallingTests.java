@@ -25,8 +25,10 @@ import java.io.StringWriter;
 import java.util.Date;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -312,6 +314,95 @@ class MarshallingTests {
     }
 
     /**
+     * Ensures that a self-referential {@link TypeVariableUsage} (as in {@code T extends Comparable<T>})
+     * survives a marshal → transport → unmarshal round-trip.
+     *
+     * @throws IOException if an error occurs during marshalling, transport or unmarshalling
+     */
+    @Test
+    void shouldMarshallAndTransportAndUnmarshalRecursiveTypeVariableUsage()
+        throws IOException {
+
+        assertRecursiveRoundTrip(
+            recursiveTypeVariable(variable -> generic("Comparable", variable)),
+            variable -> ((GenericTypeUsage) variable.upperBound().orElseThrow())
+                .parameters().findFirst().orElseThrow());
+    }
+
+    /**
+     * Ensures that a {@link TypeVariableUsage} that refers back to itself through a bounded
+     * {@link WildcardTypeUsage} (as in {@code T extends Foo<? extends T>}) survives a marshal →
+     * transport → unmarshal round-trip.
+     *
+     * @throws IOException if an error occurs during marshalling, transport or unmarshalling
+     */
+    @Test
+    void shouldMarshallAndTransportAndUnmarshalRecursiveTypeVariableUsageThroughWildcard()
+        throws IOException {
+
+        assertRecursiveRoundTrip(
+            recursiveTypeVariable(variable -> generic("Foo",
+                WildcardTypeUsage.of(codeModel, Optional.empty(), Optional.of(Lazy.of(variable))))),
+            variable -> ((WildcardTypeUsage) ((GenericTypeUsage) variable.upperBound().orElseThrow())
+                .parameters().findFirst().orElseThrow()).upperBound().orElseThrow());
+    }
+
+    /**
+     * Ensures that a {@link TypeVariableUsage} that refers back to itself through an
+     * {@link IntersectionTypeUsage} bound (as in {@code T extends Number & Comparable<T>}) survives a
+     * marshal → transport → unmarshal round-trip.
+     *
+     * @throws IOException if an error occurs during marshalling, transport or unmarshalling
+     */
+    @Test
+    void shouldMarshallAndTransportAndUnmarshalRecursiveTypeVariableUsageThroughIntersection()
+        throws IOException {
+
+        assertRecursiveRoundTrip(
+            recursiveTypeVariable(variable -> IntersectionTypeUsage.of(codeModel,
+                SpecificTypeUsage.of(codeModel, typeName("Number")),
+                generic("Comparable", variable))),
+            variable -> ((GenericTypeUsage) ((IntersectionTypeUsage) variable.upperBound().orElseThrow())
+                .types().skip(1).findFirst().orElseThrow()).parameters().findFirst().orElseThrow());
+    }
+
+    /**
+     * Ensures that a {@link TypeVariableUsage} that refers back to itself through the <i>lower-bound</i> of a
+     * {@link WildcardTypeUsage} (as in {@code T extends Foo<? super T>}) survives a marshal → transport →
+     * unmarshal round-trip.
+     *
+     * @throws IOException if an error occurs during marshalling, transport or unmarshalling
+     */
+    @Test
+    void shouldMarshallAndTransportAndUnmarshalRecursiveTypeVariableUsageThroughWildcardLowerBound()
+        throws IOException {
+
+        assertRecursiveRoundTrip(
+            recursiveTypeVariable(variable -> generic("Foo",
+                WildcardTypeUsage.of(codeModel, Optional.of(Lazy.of(variable)), Optional.empty()))),
+            variable -> ((WildcardTypeUsage) ((GenericTypeUsage) variable.upperBound().orElseThrow())
+                .parameters().findFirst().orElseThrow()).lowerBound().orElseThrow());
+    }
+
+    /**
+     * Ensures that a {@link TypeVariableUsage} that refers back to itself through a
+     * {@link UnionTypeUsage} survives a marshal → transport → unmarshal round-trip.
+     *
+     * @throws IOException if an error occurs during marshalling, transport or unmarshalling
+     */
+    @Test
+    void shouldMarshallAndTransportAndUnmarshalRecursiveTypeVariableUsageThroughUnion()
+        throws IOException {
+
+        assertRecursiveRoundTrip(
+            recursiveTypeVariable(variable -> UnionTypeUsage.of(codeModel,
+                SpecificTypeUsage.of(codeModel, typeName("Number")),
+                generic("Comparable", variable))),
+            variable -> ((GenericTypeUsage) ((UnionTypeUsage) variable.upperBound().orElseThrow())
+                .types().skip(1).findFirst().orElseThrow()).parameters().findFirst().orElseThrow());
+    }
+
+    /**
      * Ensures that {@link UnionTypeUsage} can be marshalled, transported and unmarshalled using a {@link JsonTransport}.
      *
      * @throws IOException if an error occurs during marshalling, transport or unmarshalling
@@ -377,6 +468,64 @@ class MarshallingTests {
         assertTrue(unmarshalled.upperBound().isPresent(), "upper bound must be preserved");
     }
 
+    /**
+     * Creates a {@link TypeName} in {@code some.module} with the specified simple name.
+     *
+     * @param name the simple name
+     * @return a new {@link TypeName}
+     */
+    private TypeName typeName(final String name) {
+        return TypeName.of(
+            ModuleName.of("some.module", this.nameProvider),
+            Optional.empty(),
+            Optional.empty(),
+            IrreducibleName.of(name));
+    }
+
+    /**
+     * Creates a {@link GenericTypeUsage} of the named type with the specified parameters.
+     *
+     * @param name       the simple name of the generic type
+     * @param parameters the parameters
+     * @return a new {@link GenericTypeUsage}
+     */
+    private GenericTypeUsage generic(final String name, final TypeUsage... parameters) {
+        return GenericTypeUsage.of(codeModel, typeName(name), parameters);
+    }
+
+    /**
+     * Creates a {@link TypeVariableUsage} named {@code T} whose <i>upper-bound</i> may refer back to the
+     * variable itself.
+     *
+     * @param upperBound a {@link Function} that, given the variable, produces its upper-bound
+     * @return a new, self-referential {@link TypeVariableUsage}
+     */
+    private TypeVariableUsage recursiveTypeVariable(final Function<TypeVariableUsage, TypeUsage> upperBound) {
+        final var bound = Lazy.<TypeUsage>empty();
+        final var typeVariable = TypeVariableUsage.of(codeModel,
+            typeName("T"),
+            Optional.empty(),
+            Optional.of(bound));
+        bound.set(upperBound.apply(typeVariable));
+        return typeVariable;
+    }
+
+    /**
+     * Round-trips the specified self-referential {@link TypeVariableUsage} and obtains the result, after
+     * asserting that {@code backReference} (given the unmarshalled variable) is that very variable and not a copy.
+     *
+     * @param typeVariable  the {@link TypeVariableUsage} to round-trip
+     * @param backReference locates the back-reference to the variable within the unmarshalled variable
+     * @throws IOException if an error occurs during marshalling, transport or unmarshalling
+     */
+    private void assertRecursiveRoundTrip(final TypeVariableUsage typeVariable,
+                                          final Function<TypeVariableUsage, TypeUsage> backReference)
+        throws IOException {
+
+        final var unmarshalled = marshallAndTransportAndUnMarshalAndAssert(typeVariable, null);
+        assertSame(unmarshalled, backReference.apply(unmarshalled));
+    }
+
     private <T> void marshallAndTransportAndUnMarshalAndAssert(final T original)
         throws IOException {
         marshallAndTransportAndUnMarshalAndAssert(original, null);
@@ -400,8 +549,9 @@ class MarshallingTests {
         // establish a String-based Writer into which to write the Json
         final var writer = new StringWriter();
 
-        // write the Marshalled<CodeModel> using the Transport
-        transport.write(marshalled, writer);
+        // write the Marshalled using the Transport, and the very Marshaller that produced it, so a cycle
+        // back to the outermost object is recognized as that same Marshalled
+        transport.write(marshalled, writer, marshaller);
 
         final var otherCodeModel = new ConceptualCodeModel(nameProvider);
         marshaller.bind(CodeModel.class).to(otherCodeModel);
